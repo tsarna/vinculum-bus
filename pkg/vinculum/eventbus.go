@@ -14,11 +14,11 @@ type EventBus interface {
 	Start() error
 	Stop() error
 
-	Subscribe(subscriber Subscriber, topic string)
-	Unsubscribe(subscriber Subscriber, topic string)
-	UnsubscribeAll(subscriber Subscriber)
+	Subscribe(subscriber Subscriber, topic string) error
+	Unsubscribe(subscriber Subscriber, topic string) error
+	UnsubscribeAll(subscriber Subscriber) error
 
-	Publish(topic string, payload any)
+	Publish(topic string, payload any) error
 
 	accept(eventBusMessage)
 }
@@ -83,16 +83,23 @@ func (b *basicEventBus) Start() error {
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
 							if ok, fields := matcher(msg.topic); ok {
-								subscriber.OnEvent(msg.topic, msg.payload, fields)
+								err := subscriber.OnEvent(msg.topic, msg.payload, fields) // TODO: Handle error
+								if err != nil {
+									b.logger.Error("Error in OnEvent", zap.Error(err))
+								}
 								break
 							}
 						}
 					}
 
 				case messageTypeSubscribe, messageTypeSubscribeWithExtraction:
-					b.doSubscribe(msg)
+					if err := b.doSubscribe(msg); err != nil {
+						b.logger.Error("Error in doSubscribe", zap.Error(err))
+					}
 				case messageTypeUnsubscribe:
-					b.doUnsubscribe(msg)
+					if err := b.doUnsubscribe(msg); err != nil {
+						b.logger.Error("Error in doUnsubscribe", zap.Error(err))
+					}
 				default:
 					b.logger.Debug("EventBus received unknown message type", zap.Int("msgType", int(msg.msgType)))
 				}
@@ -106,15 +113,16 @@ func (b *basicEventBus) Start() error {
 	return nil
 }
 
-func (b *basicEventBus) Publish(topic string, payload any) {
+func (b *basicEventBus) Publish(topic string, payload any) error {
 	b.accept(eventBusMessage{
 		msgType: messageTypeEvent,
 		topic:   topic,
 		payload: payload,
 	})
+	return nil
 }
 
-func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) {
+func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
 	msgType := messageTypeSubscribe
 	if mqttpattern.HasExtractions(topic) {
 		msgType = messageTypeSubscribeWithExtraction
@@ -125,17 +133,19 @@ func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) {
 		topic:   topic,
 		payload: subscriber,
 	})
+	return nil
 }
 
-func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) {
+func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) error {
 	b.accept(eventBusMessage{
 		msgType: messageTypeUnsubscribe,
 		topic:   topic,
 		payload: subscriber,
 	})
+	return nil
 }
 
-func (b *basicEventBus) doSubscribe(msg eventBusMessage) {
+func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 	subscriber := msg.payload.(Subscriber)
 
 	var currentSubscriptions map[string]matcher
@@ -148,15 +158,15 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) {
 
 	currentSubscriptions[msg.topic] = makeMatcher(msg)
 
-	subscriber.OnSubscribe(msg.topic)
+	return subscriber.OnSubscribe(msg.topic)
 }
 
-func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) {
+func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 	subscriber := msg.payload.(Subscriber)
 
 	currentSubscriptions, ok := b.subscriptions[subscriber]
 	if !ok {
-		return // not subscribed
+		return nil // not subscribed - not an error
 	}
 
 	delete(currentSubscriptions, msg.topic)
@@ -165,13 +175,13 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) {
 		delete(b.subscriptions, subscriber)
 	}
 
-	subscriber.OnUnsubscribe(msg.topic)
+	return subscriber.OnUnsubscribe(msg.topic)
 }
 
-func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) {
+func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) error {
 	delete(b.subscriptions, subscriber)
 
-	subscriber.OnUnsubscribe("")
+	return subscriber.OnUnsubscribe("")
 }
 
 // Accept sends a message to the event bus's channel

@@ -32,19 +32,21 @@ func NewMockSubscriber() *MockSubscriber {
 	}
 }
 
-func (m *MockSubscriber) OnSubscribe(topic string) {
+func (m *MockSubscriber) OnSubscribe(topic string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.subscriptions = append(m.subscriptions, topic)
+	return nil
 }
 
-func (m *MockSubscriber) OnUnsubscribe(topic string) {
+func (m *MockSubscriber) OnUnsubscribe(topic string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unsubscriptions = append(m.unsubscriptions, topic)
+	return nil
 }
 
-func (m *MockSubscriber) OnEvent(topic string, message any, fields map[string]string) {
+func (m *MockSubscriber) OnEvent(topic string, message any, fields map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, Event{
@@ -52,6 +54,7 @@ func (m *MockSubscriber) OnEvent(topic string, message any, fields map[string]st
 		Message: message,
 		Fields:  fields,
 	})
+	return nil
 }
 
 func (m *MockSubscriber) GetSubscriptions() []string {

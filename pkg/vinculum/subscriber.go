@@ -10,21 +10,24 @@ import (
 )
 
 type Subscriber interface {
-	OnSubscribe(topic string)
-	OnUnsubscribe(topic string)
-	OnEvent(topic string, message any, fields map[string]string)
+	OnSubscribe(topic string) error
+	OnUnsubscribe(topic string) error
+	OnEvent(topic string, message any, fields map[string]string) error
 }
 
 type BaseSubscriber struct {
 }
 
-func (b *BaseSubscriber) OnSubscribe(topic string) {
+func (b *BaseSubscriber) OnSubscribe(topic string) error {
+	return nil
 }
 
-func (b *BaseSubscriber) OnUnsubscribe(topic string) {
+func (b *BaseSubscriber) OnUnsubscribe(topic string) error {
+	return nil
 }
 
-func (b *BaseSubscriber) OnEvent(topic string, message any, fields map[string]string) {
+func (b *BaseSubscriber) OnEvent(topic string, message any, fields map[string]string) error {
+	return nil
 }
 
 type matcher func(topic string) (bool, map[string]string)
@@ -89,29 +92,29 @@ func NewNamedLoggingSubscriber(logger *zap.Logger, logLevel zapcore.Level, name 
 }
 
 // OnSubscribe logs subscription events
-func (l *LoggingSubscriber) OnSubscribe(topic string) {
+func (l *LoggingSubscriber) OnSubscribe(topic string) error {
 	l.logger.Log(l.logLevel, "OnSubscribe called",
 		zap.String("subscriber", l.name),
 		zap.String("topic", topic),
 	)
 
 	// Call parent implementation (which is empty, but maintains the pattern)
-	l.BaseSubscriber.OnSubscribe(topic)
+	return l.BaseSubscriber.OnSubscribe(topic)
 }
 
 // OnUnsubscribe logs unsubscription events
-func (l *LoggingSubscriber) OnUnsubscribe(topic string) {
+func (l *LoggingSubscriber) OnUnsubscribe(topic string) error {
 	l.logger.Log(l.logLevel, "OnUnsubscribe called",
 		zap.String("subscriber", l.name),
 		zap.String("topic", topic),
 	)
 
 	// Call parent implementation (which is empty, but maintains the pattern)
-	l.BaseSubscriber.OnUnsubscribe(topic)
+	return l.BaseSubscriber.OnUnsubscribe(topic)
 }
 
 // OnEvent logs event reception with full details
-func (l *LoggingSubscriber) OnEvent(topic string, message any, fields map[string]string) {
+func (l *LoggingSubscriber) OnEvent(topic string, message any, fields map[string]string) error {
 	// Convert message to string for logging (handle various types safely)
 	var messageStr string
 	switch v := message.(type) {
@@ -136,5 +139,5 @@ func (l *LoggingSubscriber) OnEvent(topic string, message any, fields map[string
 	)
 
 	// Call parent implementation (which is empty, but maintains the pattern)
-	l.BaseSubscriber.OnEvent(topic, message, fields)
+	return l.BaseSubscriber.OnEvent(topic, message, fields)
 }
