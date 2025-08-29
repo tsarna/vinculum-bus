@@ -19,8 +19,7 @@ type EventBus interface {
 	UnsubscribeAll(subscriber Subscriber) error
 
 	Publish(topic string, payload any) error
-
-	accept(eventBusMessage)
+	PublishSync(topic string, payload any) error
 }
 
 type messageType int
@@ -30,6 +29,7 @@ const (
 	messageTypeSubscribe
 	messageTypeSubscribeWithExtraction
 	messageTypeUnsubscribe
+	messageTypeEventSync
 )
 
 type eventBusMessage struct {
@@ -41,6 +41,12 @@ type eventBusMessage struct {
 // subscriptionRequest holds subscriber and response channel for subscribe/unsubscribe operations
 type subscriptionRequest struct {
 	subscriber Subscriber
+	responseCh chan error
+}
+
+// syncPublishRequest holds payload and response channel for synchronous publish operations
+type syncPublishRequest struct {
+	payload    any
 	responseCh chan error
 }
 
@@ -98,6 +104,11 @@ func (b *basicEventBus) Start() error {
 						}
 					}
 
+				case messageTypeEventSync:
+					if err := b.doPublishSync(msg); err != nil {
+						b.logger.Error("Error in doPublishSync", zap.Error(err))
+					}
+
 				case messageTypeSubscribe, messageTypeSubscribeWithExtraction:
 					if err := b.doSubscribe(msg); err != nil {
 						b.logger.Error("Error in doSubscribe", zap.Error(err))
@@ -126,6 +137,20 @@ func (b *basicEventBus) Publish(topic string, payload any) error {
 		payload: payload,
 	})
 	return nil
+}
+
+func (b *basicEventBus) PublishSync(topic string, payload any) error {
+	responseCh := make(chan error, 1)
+	b.acceptWithResponse(eventBusMessage{
+		msgType: messageTypeEventSync,
+		topic:   topic,
+		payload: syncPublishRequest{
+			payload:    payload,
+			responseCh: responseCh,
+		},
+	}, responseCh)
+
+	return <-responseCh
 }
 
 func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
@@ -199,6 +224,35 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 	err := subscriber.OnUnsubscribe(msg.topic)
 	req.responseCh <- err
 	return err
+}
+
+func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
+	req := msg.payload.(syncPublishRequest)
+
+	// Process the message just like a regular event, but track any errors
+	var publishError error
+	eventCount := 0
+
+	for subscriber := range b.subscriptions {
+		for _, matcher := range b.subscriptions[subscriber] {
+			if ok, fields := matcher(msg.topic); ok {
+				eventCount++
+				if err := subscriber.OnEvent(msg.topic, req.payload, fields); err != nil {
+					if publishError == nil {
+						publishError = err // Store first error
+					} else {
+						// log any additional errors
+						b.logger.Error("Error in OnEvent during sync publish", zap.Error(err))
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Send response back to caller
+	req.responseCh <- publishError
+	return publishError
 }
 
 func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) error {

@@ -1,6 +1,7 @@
 package vinculum
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ type MockSubscriber struct {
 	unsubscriptions []string
 	events          []Event
 	mu              sync.RWMutex
+	simulateError   bool
 }
 
 type Event struct {
@@ -54,6 +56,10 @@ func (m *MockSubscriber) OnEvent(topic string, message any, fields map[string]st
 		Message: message,
 		Fields:  fields,
 	})
+
+	if m.simulateError {
+		return fmt.Errorf("simulated error")
+	}
 	return nil
 }
 
@@ -691,5 +697,91 @@ func TestEventBusAutomaticParameterDetection(t *testing.T) {
 
 	if !foundExtractionEvent {
 		t.Error("Expected to find event with parameter extraction")
+	}
+}
+
+func TestEventBusPublishSync(t *testing.T) {
+	eventBus := NewEventBus(zaptest.NewLogger(t))
+	err := eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start EventBus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	mockSub := &MockSubscriber{}
+	err = eventBus.Subscribe(mockSub, "test/sync")
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Test successful PublishSync
+	err = eventBus.PublishSync("test/sync", "sync message")
+	if err != nil {
+		t.Errorf("PublishSync should not return error, got: %v", err)
+	}
+
+	// Check that the message was delivered
+	if len(mockSub.events) != 1 {
+		t.Errorf("Expected 1 event, got %d", len(mockSub.events))
+	} else {
+		event := mockSub.events[0]
+		if event.Topic != "test/sync" || event.Message != "sync message" {
+			t.Errorf("Expected topic='test/sync' and message='sync message', got topic='%s' and message='%v'",
+				event.Topic, event.Message)
+		}
+	}
+
+	// Test PublishSync with no matching subscribers
+	err = eventBus.PublishSync("test/nomatch", "no subscribers")
+	if err != nil {
+		t.Errorf("PublishSync with no subscribers should not return error, got: %v", err)
+	}
+
+	// Should still only have 1 event
+	if len(mockSub.events) != 1 {
+		t.Errorf("Expected still 1 event after no-match publish, got %d", len(mockSub.events))
+	}
+}
+
+func TestEventBusPublishSyncWithError(t *testing.T) {
+	eventBus := NewEventBus(zaptest.NewLogger(t))
+	err := eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start EventBus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	// Create a subscriber that returns an error
+	errorSub := &MockSubscriber{simulateError: true}
+	err = eventBus.Subscribe(errorSub, "test/error")
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Test PublishSync with error
+	err = eventBus.PublishSync("test/error", "error message")
+	if err == nil {
+		t.Error("PublishSync should return error when subscriber fails")
+	}
+
+	expectedError := "simulated error"
+	if err.Error() != expectedError {
+		t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
+	}
+}
+
+func TestEventBusPublishSyncBeforeStart(t *testing.T) {
+	eventBus := NewEventBus(zaptest.NewLogger(t))
+	// Don't start the EventBus
+
+	// Test PublishSync on stopped EventBus
+	err := eventBus.PublishSync("test/topic", "message")
+	if err == nil {
+		t.Error("PublishSync should return error when EventBus is not started")
+	}
+
+	expectedError := "event bus not started"
+	if err.Error() != expectedError {
+		t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
 	}
 }
