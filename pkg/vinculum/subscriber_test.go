@@ -1,7 +1,12 @@
 package vinculum
 
 import (
+	"fmt"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestBaseSubscriber(t *testing.T) {
@@ -393,4 +398,168 @@ func TestMakeMatcherEdgeCases(t *testing.T) {
 	if matches {
 		t.Error("Expected insufficient levels to not match multiple wildcards")
 	}
+}
+
+func TestNewLoggingSubscriber(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	// Test basic constructor
+	subscriber := NewLoggingSubscriber(logger, zap.InfoLevel)
+	if subscriber == nil {
+		t.Fatal("NewLoggingSubscriber returned nil")
+	}
+
+	if subscriber.logger != logger {
+		t.Error("Logger not set correctly")
+	}
+
+	if subscriber.logLevel != zap.InfoLevel {
+		t.Error("Log level not set correctly")
+	}
+
+	if subscriber.name != "LoggingSubscriber" {
+		t.Error("Default name not set correctly")
+	}
+}
+
+func TestNewNamedLoggingSubscriber(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	customName := "MyCustomSubscriber"
+
+	subscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, customName)
+	if subscriber == nil {
+		t.Fatal("NewNamedLoggingSubscriber returned nil")
+	}
+
+	if subscriber.logger != logger {
+		t.Error("Logger not set correctly")
+	}
+
+	if subscriber.logLevel != zap.DebugLevel {
+		t.Error("Log level not set correctly")
+	}
+
+	if subscriber.name != customName {
+		t.Error("Custom name not set correctly")
+	}
+}
+
+func TestLoggingSubscriberOnSubscribe(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	subscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "TestSubscriber")
+
+	// This should log without error
+	subscriber.OnSubscribe("test/topic")
+	subscriber.OnSubscribe("user/+userId/profile")
+	subscriber.OnSubscribe("device/#")
+
+	// Test doesn't crash and methods can be called multiple times
+}
+
+func TestLoggingSubscriberOnUnsubscribe(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	subscriber := NewNamedLoggingSubscriber(logger, zap.WarnLevel, "TestSubscriber")
+
+	// This should log without error
+	subscriber.OnUnsubscribe("test/topic")
+	subscriber.OnUnsubscribe("user/+userId/profile")
+	subscriber.OnUnsubscribe("")
+
+	// Test doesn't crash and methods can be called multiple times
+}
+
+func TestLoggingSubscriberOnEvent(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	subscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, "TestSubscriber")
+
+	// Test with string message
+	subscriber.OnEvent("test/topic", "string message", nil)
+
+	// Test with map message
+	mapMessage := map[string]interface{}{
+		"key1": "value1",
+		"key2": 42,
+	}
+	subscriber.OnEvent("api/data", mapMessage, nil)
+
+	// Test with extracted fields
+	fields := map[string]string{
+		"userId": "123",
+		"action": "login",
+	}
+	subscriber.OnEvent("user/123/login", "User logged in", fields)
+
+	// Test with nil message
+	subscriber.OnEvent("empty/topic", nil, nil)
+
+	// Test with byte slice message
+	subscriber.OnEvent("binary/data", []byte("binary data"), nil)
+
+	// Test with various field combinations
+	manyFields := map[string]string{
+		"field1": "value1",
+		"field2": "value2",
+		"field3": "value3",
+	}
+	subscriber.OnEvent("complex/topic", "complex message", manyFields)
+
+	// Test doesn't crash and methods can be called multiple times
+}
+
+func TestLoggingSubscriberDifferentLogLevels(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	// Test each log level
+	levels := []zap.AtomicLevel{
+		zap.NewAtomicLevelAt(zap.DebugLevel),
+		zap.NewAtomicLevelAt(zap.InfoLevel),
+		zap.NewAtomicLevelAt(zap.WarnLevel),
+		zap.NewAtomicLevelAt(zap.ErrorLevel),
+	}
+
+	for i, level := range levels {
+		subscriber := NewNamedLoggingSubscriber(logger, level.Level(), fmt.Sprintf("Subscriber%d", i))
+
+		subscriber.OnSubscribe("test/topic")
+		subscriber.OnEvent("test/topic", "test message", map[string]string{"param": "value"})
+		subscriber.OnUnsubscribe("test/topic")
+	}
+}
+
+func TestLoggingSubscriberWithEventBus(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
+
+	err := eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start event bus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	// Create logging subscribers with different log levels
+	debugSubscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, "DebugSubscriber")
+	infoSubscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "InfoSubscriber")
+
+	// Subscribe to topics
+	eventBus.Subscribe(debugSubscriber, "debug/+level/topic")
+	eventBus.Subscribe(infoSubscriber, "info/events/#")
+
+	// Give time for subscriptions to be processed
+	time.Sleep(10 * time.Millisecond)
+
+	// Publish events
+	eventBus.Publish("debug/high/topic", "Debug message")
+	eventBus.Publish("info/events/user/login", map[string]interface{}{
+		"userId":    "123",
+		"timestamp": "2024-01-01T12:00:00Z",
+	})
+
+	// Give time for events to be processed
+	time.Sleep(10 * time.Millisecond)
+
+	// Test unsubscribe
+	eventBus.UnsubscribeAll(debugSubscriber)
+
+	// Give time for unsubscription to be processed
+	time.Sleep(10 * time.Millisecond)
 }

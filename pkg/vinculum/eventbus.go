@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tsarna/mqttpattern"
+	"go.uber.org/zap"
 )
 
 type EventBus interface {
@@ -47,15 +48,17 @@ type basicEventBus struct {
 	wg            sync.WaitGroup
 	started       int32 // Atomic boolean (0 = false, 1 = true)
 	subscriptions map[Subscriber]map[string]matcher
+	logger        *zap.Logger
 }
 
-func NewEventBus() EventBus {
+func NewEventBus(logger *zap.Logger) EventBus {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &basicEventBus{
 		ch:            make(chan eventBusMessage, 100), // Buffered channel to prevent blocking
 		ctx:           ctx,
 		cancel:        cancel,
 		subscriptions: make(map[Subscriber]map[string]matcher),
+		logger:        logger,
 	}
 }
 
@@ -70,7 +73,7 @@ func (b *basicEventBus) Start() error {
 
 	go func() {
 		defer b.wg.Done()
-		fmt.Println("EventBus started, listening for messages...")
+		b.logger.Info("EventBus started, listening for messages")
 
 		for {
 			select {
@@ -91,10 +94,10 @@ func (b *basicEventBus) Start() error {
 				case messageTypeUnsubscribe:
 					b.doUnsubscribe(msg)
 				default:
-					fmt.Printf("EventBus received: %+v\n", msg.msgType)
+					b.logger.Debug("EventBus received unknown message type", zap.Int("msgType", int(msg.msgType)))
 				}
 			case <-b.ctx.Done():
-				fmt.Println("EventBus stopping...")
+				b.logger.Info("EventBus stopping")
 				return
 			}
 		}
@@ -175,7 +178,7 @@ func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) {
 func (b *basicEventBus) accept(msg eventBusMessage) {
 	// Quick atomic check - no mutex needed
 	if atomic.LoadInt32(&b.started) == 0 {
-		fmt.Println("Warning: event bus not started, message ignored")
+		b.logger.Warn("Event bus not started, message ignored")
 		return
 	}
 
@@ -183,9 +186,9 @@ func (b *basicEventBus) accept(msg eventBusMessage) {
 	case b.ch <- msg: // Thread-safe channel operation
 		// Message sent successfully
 	case <-b.ctx.Done():
-		fmt.Println("EventBus stopped, message ignored")
+		b.logger.Debug("EventBus stopped, message ignored")
 	default:
-		fmt.Println("Warning: event bus channel full, message dropped")
+		b.logger.Warn("Event bus channel full, message dropped")
 	}
 }
 
@@ -200,6 +203,6 @@ func (b *basicEventBus) Stop() error {
 	b.wg.Wait()
 	close(b.ch) // Thread-safe channel operation
 
-	fmt.Println("EventBus stopped")
+	b.logger.Info("EventBus stopped")
 	return nil
 }

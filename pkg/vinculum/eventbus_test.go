@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap/zaptest"
 )
 
 // MockSubscriber implements the Subscriber interface for testing
@@ -85,7 +87,8 @@ func (m *MockSubscriber) Reset() {
 }
 
 func TestNewEventBus(t *testing.T) {
-	eventBusInstance := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBusInstance := NewEventBus(logger)
 	if eventBusInstance == nil {
 		t.Fatal("NewEventBus returned nil")
 	}
@@ -101,7 +104,8 @@ func TestNewEventBus(t *testing.T) {
 }
 
 func TestEventBusStartStop(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 
 	// Test starting the event bus
 	err := eventBus.Start()
@@ -132,7 +136,8 @@ func TestEventBusStartStop(t *testing.T) {
 }
 
 func TestEventBusSubscribeUnsubscribe(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -165,7 +170,8 @@ func TestEventBusSubscribeUnsubscribe(t *testing.T) {
 }
 
 func TestEventBusUnsubscribeAll(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -201,7 +207,8 @@ func TestEventBusUnsubscribeAll(t *testing.T) {
 }
 
 func TestEventBusPublishEvent(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -239,7 +246,8 @@ func TestEventBusPublishEvent(t *testing.T) {
 }
 
 func TestEventBusExactTopicMatching(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -273,7 +281,8 @@ func TestEventBusExactTopicMatching(t *testing.T) {
 }
 
 func TestEventBusWildcardMatching(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -304,7 +313,8 @@ func TestEventBusWildcardMatching(t *testing.T) {
 }
 
 func TestEventBusMultilevelWildcardMatching(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -335,7 +345,8 @@ func TestEventBusMultilevelWildcardMatching(t *testing.T) {
 }
 
 func TestEventBusParameterExtraction(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -376,7 +387,8 @@ func TestEventBusParameterExtraction(t *testing.T) {
 }
 
 func TestEventBusMultipleSubscribers(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -413,7 +425,8 @@ func TestEventBusMultipleSubscribers(t *testing.T) {
 }
 
 func TestEventBusMultipleMatchingPatterns(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -456,7 +469,8 @@ func TestEventBusMultipleMatchingPatterns(t *testing.T) {
 }
 
 func TestEventBusMessageBeforeStart(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	subscriber := NewMockSubscriber()
 
 	// Try to subscribe before starting event bus
@@ -482,7 +496,8 @@ func TestEventBusMessageBeforeStart(t *testing.T) {
 }
 
 func TestEventBusConcurrentOperations(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -527,7 +542,8 @@ func TestEventBusConcurrentOperations(t *testing.T) {
 
 func TestEventBusChannelBuffer(t *testing.T) {
 	// Create a event bus and start it
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -561,7 +577,8 @@ func TestEventBusChannelBuffer(t *testing.T) {
 }
 
 func TestEventBusStopWithPendingMessages(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
@@ -589,7 +606,8 @@ func TestEventBusStopWithPendingMessages(t *testing.T) {
 }
 
 func TestEventBusContextCancellation(t *testing.T) {
-	eventBusInstance := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBusInstance := NewEventBus(logger)
 	b := eventBusInstance.(*basicEventBus)
 
 	err := eventBusInstance.Start()
@@ -612,7 +630,8 @@ func TestEventBusContextCancellation(t *testing.T) {
 }
 
 func TestEventBusAutomaticParameterDetection(t *testing.T) {
-	eventBus := NewEventBus()
+	logger := zaptest.NewLogger(t)
+	eventBus := NewEventBus(logger)
 	err := eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)

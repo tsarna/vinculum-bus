@@ -1,9 +1,12 @@
 package vinculum
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/tsarna/mqttpattern"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type Subscriber interface {
@@ -57,4 +60,81 @@ func makeMatcher(subscribeMsg eventBusMessage) matcher {
 	}
 
 	panic("unsupported message type")
+}
+
+// LoggingSubscriber is a BaseSubscriber that logs all method calls for debugging and demonstration
+type LoggingSubscriber struct {
+	BaseSubscriber
+	logger   *zap.Logger
+	logLevel zapcore.Level
+	name     string // Optional name for identification in logs
+}
+
+// NewLoggingSubscriber creates a new LoggingSubscriber with the specified logger and log level
+func NewLoggingSubscriber(logger *zap.Logger, logLevel zapcore.Level) *LoggingSubscriber {
+	return &LoggingSubscriber{
+		logger:   logger,
+		logLevel: logLevel,
+		name:     "LoggingSubscriber",
+	}
+}
+
+// NewNamedLoggingSubscriber creates a new LoggingSubscriber with a custom name for identification
+func NewNamedLoggingSubscriber(logger *zap.Logger, logLevel zapcore.Level, name string) *LoggingSubscriber {
+	return &LoggingSubscriber{
+		logger:   logger,
+		logLevel: logLevel,
+		name:     name,
+	}
+}
+
+// OnSubscribe logs subscription events
+func (l *LoggingSubscriber) OnSubscribe(topic string) {
+	l.logger.Log(l.logLevel, "OnSubscribe called",
+		zap.String("subscriber", l.name),
+		zap.String("topic", topic),
+	)
+
+	// Call parent implementation (which is empty, but maintains the pattern)
+	l.BaseSubscriber.OnSubscribe(topic)
+}
+
+// OnUnsubscribe logs unsubscription events
+func (l *LoggingSubscriber) OnUnsubscribe(topic string) {
+	l.logger.Log(l.logLevel, "OnUnsubscribe called",
+		zap.String("subscriber", l.name),
+		zap.String("topic", topic),
+	)
+
+	// Call parent implementation (which is empty, but maintains the pattern)
+	l.BaseSubscriber.OnUnsubscribe(topic)
+}
+
+// OnEvent logs event reception with full details
+func (l *LoggingSubscriber) OnEvent(topic string, message any, fields map[string]string) {
+	// Convert message to string for logging (handle various types safely)
+	var messageStr string
+	switch v := message.(type) {
+	case string:
+		messageStr = v
+	case []byte:
+		messageStr = string(v)
+	case nil:
+		messageStr = "<nil>"
+	default:
+		messageStr = fmt.Sprintf("%v", v)
+	}
+
+	// The fields are already structured as a map, so we can log them directly via zap.Any
+
+	l.logger.Log(l.logLevel, "OnEvent called",
+		zap.String("subscriber", l.name),
+		zap.String("topic", topic),
+		zap.String("message", messageStr),
+		zap.Any("extractedFields", fields),
+		zap.Int("fieldCount", len(fields)),
+	)
+
+	// Call parent implementation (which is empty, but maintains the pattern)
+	l.BaseSubscriber.OnEvent(topic, message, fields)
 }
