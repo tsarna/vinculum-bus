@@ -38,6 +38,12 @@ type eventBusMessage struct {
 	payload any
 }
 
+// subscriptionRequest holds subscriber and response channel for subscribe/unsubscribe operations
+type subscriptionRequest struct {
+	subscriber Subscriber
+	responseCh chan error
+}
+
 // basicEventBus implements the EventBus interface using minimal locking.
 // Uses atomic operations for the started flag and relies on Go's
 // inherently thread-safe channels for message passing.
@@ -128,25 +134,36 @@ func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
 		msgType = messageTypeSubscribeWithExtraction
 	}
 
-	b.accept(eventBusMessage{
+	responseCh := make(chan error, 1)
+	b.acceptWithResponse(eventBusMessage{
 		msgType: msgType,
 		topic:   topic,
-		payload: subscriber,
-	})
-	return nil
+		payload: subscriptionRequest{
+			subscriber: subscriber,
+			responseCh: responseCh,
+		},
+	}, responseCh)
+
+	return <-responseCh
 }
 
 func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) error {
-	b.accept(eventBusMessage{
+	responseCh := make(chan error, 1)
+	b.acceptWithResponse(eventBusMessage{
 		msgType: messageTypeUnsubscribe,
 		topic:   topic,
-		payload: subscriber,
-	})
-	return nil
+		payload: subscriptionRequest{
+			subscriber: subscriber,
+			responseCh: responseCh,
+		},
+	}, responseCh)
+
+	return <-responseCh
 }
 
 func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
-	subscriber := msg.payload.(Subscriber)
+	req := msg.payload.(subscriptionRequest)
+	subscriber := req.subscriber
 
 	var currentSubscriptions map[string]matcher
 	var ok bool
@@ -158,15 +175,19 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 
 	currentSubscriptions[msg.topic] = makeMatcher(msg)
 
-	return subscriber.OnSubscribe(msg.topic)
+	err := subscriber.OnSubscribe(msg.topic)
+	req.responseCh <- err
+	return err
 }
 
 func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
-	subscriber := msg.payload.(Subscriber)
+	req := msg.payload.(subscriptionRequest)
+	subscriber := req.subscriber
 
 	currentSubscriptions, ok := b.subscriptions[subscriber]
 	if !ok {
-		return nil // not subscribed - not an error
+		req.responseCh <- nil // not subscribed - not an error
+		return nil
 	}
 
 	delete(currentSubscriptions, msg.topic)
@@ -175,7 +196,9 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 		delete(b.subscriptions, subscriber)
 	}
 
-	return subscriber.OnUnsubscribe(msg.topic)
+	err := subscriber.OnUnsubscribe(msg.topic)
+	req.responseCh <- err
+	return err
 }
 
 func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) error {
@@ -184,7 +207,7 @@ func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) error {
 	return subscriber.OnUnsubscribe("")
 }
 
-// Accept sends a message to the event bus's channel
+// accept sends a message to the event bus's channel (for publish operations - no response needed)
 func (b *basicEventBus) accept(msg eventBusMessage) {
 	// Quick atomic check - no mutex needed
 	if atomic.LoadInt32(&b.started) == 0 {
@@ -199,6 +222,31 @@ func (b *basicEventBus) accept(msg eventBusMessage) {
 		b.logger.Debug("EventBus stopped, message ignored")
 	default:
 		b.logger.Warn("Event bus channel full, message dropped")
+	}
+}
+
+// acceptWithResponse sends a subscription message and handles error responses
+func (b *basicEventBus) acceptWithResponse(msg eventBusMessage, responseCh chan error) {
+	sendErrorResponse := func(err error) {
+		responseCh <- err
+	}
+
+	// Quick atomic check - no mutex needed
+	if atomic.LoadInt32(&b.started) == 0 {
+		b.logger.Warn("Event bus not started, message ignored")
+		sendErrorResponse(fmt.Errorf("event bus not started"))
+		return
+	}
+
+	select {
+	case b.ch <- msg: // Thread-safe channel operation
+		// Message sent successfully
+	case <-b.ctx.Done():
+		b.logger.Debug("EventBus stopped, message ignored")
+		sendErrorResponse(fmt.Errorf("event bus stopped"))
+	default:
+		b.logger.Warn("Event bus channel full, message dropped")
+		sendErrorResponse(fmt.Errorf("event bus channel full"))
 	}
 }
 
