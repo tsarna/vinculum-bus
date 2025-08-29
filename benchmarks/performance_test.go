@@ -1,4 +1,4 @@
-package vinculum
+package benchmarks
 
 import (
 	"context"
@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/otel"
 )
 
 // NoOpSubscriber for benchmarking - minimal overhead
 type NoOpSubscriber struct {
-	BaseSubscriber
+	vinculum.BaseSubscriber
 }
 
 func (n *NoOpSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
@@ -19,7 +22,7 @@ func (n *NoOpSubscriber) OnEvent(ctx context.Context, topic string, message any,
 
 func BenchmarkPublishNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := NewEventBus(logger)
+	eventBus := vinculum.NewEventBus(logger)
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -35,16 +38,14 @@ func BenchmarkPublishNoObservability(b *testing.B) {
 	}
 }
 
-// Note: OpenTelemetry benchmark removed to avoid import cycle issues
-
 func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := NewEventBus(logger)
+	eventBus := vinculum.NewEventBus(logger)
 	eventBus.Start()
 	defer eventBus.Stop()
 
 	// Create standalone metrics provider
-	metricsProvider := NewStandaloneMetricsProvider(eventBus, &StandaloneMetricsConfig{
+	metricsProvider := vinculum.NewStandaloneMetricsProvider(eventBus, &vinculum.StandaloneMetricsConfig{
 		Interval:     time.Minute, // Long interval for benchmarking
 		MetricsTopic: "$metrics",
 		ServiceName:  "benchmark",
@@ -53,8 +54,37 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	defer metricsProvider.Stop()
 
 	// Create observable EventBus with standalone metrics
-	observableEventBus := NewEventBusWithObservability(logger, &ObservabilityConfig{
+	observableEventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
 		MetricsProvider: metricsProvider,
+		ServiceName:     "benchmark",
+		ServiceVersion:  "v1.0.0",
+	})
+
+	observableEventBus.Start()
+	defer observableEventBus.Stop()
+
+	// Add a subscriber to avoid messages being dropped
+	subscriber := &NoOpSubscriber{}
+	observableEventBus.Subscribe(context.Background(), subscriber, "test/topic")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		observableEventBus.Publish(context.Background(), "test/topic", "benchmark message")
+	}
+}
+
+func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
+	logger := zap.NewNop()
+
+	// Create OpenTelemetry provider
+	otelProvider := otel.NewProvider("benchmark", "v1.0.0")
+
+	// Create observable EventBus with OpenTelemetry
+	observableEventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
+		MetricsProvider: otelProvider,
+		TracingProvider: otelProvider,
 		ServiceName:     "benchmark",
 		ServiceVersion:  "v1.0.0",
 	})
@@ -76,7 +106,7 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 
 func BenchmarkPublishSyncNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := NewEventBus(logger)
+	eventBus := vinculum.NewEventBus(logger)
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -94,7 +124,7 @@ func BenchmarkPublishSyncNoObservability(b *testing.B) {
 
 func BenchmarkThroughput(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := NewEventBus(logger)
+	eventBus := vinculum.NewEventBus(logger)
 	eventBus.Start()
 	defer eventBus.Stop()
 

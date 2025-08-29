@@ -219,12 +219,12 @@ eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
 - **Graceful degradation** - Continues working on errors
 
 ### Performance Characteristics
-- **~112ns** per publish operation (no observability)
-- **~550ns** per publish operation (with OpenTelemetry observability)  
-- **~160ns** per publish operation (with standalone metrics)
-- **~710ns** per PublishSync operation (waits for completion)
+- **~110ns** per publish operation (no observability, 0 allocations)
+- **~529ns** per publish operation (with OpenTelemetry observability, 12 allocations)  
+- **~180ns** per publish operation (with standalone metrics, 1 allocation)
+- **~706ns** per PublishSync operation (waits for completion, 3 allocations)
 - **4.6+ million messages/second** throughput capability
-- **Zero allocations** in async publish hot path
+- **Zero allocations** in async publish hot path (no observability)
 - **Optimized hot path** with minimal overhead
 - **Configurable buffering** for backpressure handling
 
