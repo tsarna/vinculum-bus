@@ -1,0 +1,205 @@
+package vinculum
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tsarna/mqttpattern"
+)
+
+type EventBus interface {
+	Start() error
+	Stop() error
+
+	Subscribe(subscriber Subscriber, topic string)
+	Unsubscribe(subscriber Subscriber, topic string)
+	UnsubscribeAll(subscriber Subscriber)
+
+	Publish(topic string, payload any)
+
+	accept(eventBusMessage)
+}
+
+type messageType int
+
+const (
+	messageTypeEvent messageType = iota
+	messageTypeSubscribe
+	messageTypeSubscribeWithExtraction
+	messageTypeUnsubscribe
+)
+
+type eventBusMessage struct {
+	msgType messageType
+	topic   string
+	payload any
+}
+
+// basicEventBus implements the EventBus interface using minimal locking.
+// Uses atomic operations for the started flag and relies on Go's
+// inherently thread-safe channels for message passing.
+type basicEventBus struct {
+	ch            chan eventBusMessage
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	started       int32 // Atomic boolean (0 = false, 1 = true)
+	subscriptions map[Subscriber]map[string]matcher
+}
+
+func NewEventBus() EventBus {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &basicEventBus{
+		ch:            make(chan eventBusMessage, 100), // Buffered channel to prevent blocking
+		ctx:           ctx,
+		cancel:        cancel,
+		subscriptions: make(map[Subscriber]map[string]matcher),
+	}
+}
+
+// Start begins the event bus's message processing goroutine
+func (b *basicEventBus) Start() error {
+	// Use atomic compare-and-swap to prevent double-start
+	if !atomic.CompareAndSwapInt32(&b.started, 0, 1) {
+		return fmt.Errorf("event bus already started")
+	}
+
+	b.wg.Add(1)
+
+	go func() {
+		defer b.wg.Done()
+		fmt.Println("EventBus started, listening for messages...")
+
+		for {
+			select {
+			case msg := <-b.ch: // Thread-safe channel operation
+				switch msg.msgType {
+				case messageTypeEvent:
+					for subscriber := range b.subscriptions {
+						for _, matcher := range b.subscriptions[subscriber] {
+							if ok, fields := matcher(msg.topic); ok {
+								subscriber.OnEvent(msg.topic, msg.payload, fields)
+								break
+							}
+						}
+					}
+
+				case messageTypeSubscribe, messageTypeSubscribeWithExtraction:
+					b.doSubscribe(msg)
+				case messageTypeUnsubscribe:
+					b.doUnsubscribe(msg)
+				default:
+					fmt.Printf("EventBus received: %+v\n", msg.msgType)
+				}
+			case <-b.ctx.Done():
+				fmt.Println("EventBus stopping...")
+				return
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (b *basicEventBus) Publish(topic string, payload any) {
+	b.accept(eventBusMessage{
+		msgType: messageTypeEvent,
+		topic:   topic,
+		payload: payload,
+	})
+}
+
+func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) {
+	msgType := messageTypeSubscribe
+	if mqttpattern.HasExtractions(topic) {
+		msgType = messageTypeSubscribeWithExtraction
+	}
+
+	b.accept(eventBusMessage{
+		msgType: msgType,
+		topic:   topic,
+		payload: subscriber,
+	})
+}
+
+func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) {
+	b.accept(eventBusMessage{
+		msgType: messageTypeUnsubscribe,
+		topic:   topic,
+		payload: subscriber,
+	})
+}
+
+func (b *basicEventBus) doSubscribe(msg eventBusMessage) {
+	subscriber := msg.payload.(Subscriber)
+
+	var currentSubscriptions map[string]matcher
+	var ok bool
+
+	if currentSubscriptions, ok = b.subscriptions[subscriber]; !ok {
+		currentSubscriptions = make(map[string]matcher)
+		b.subscriptions[subscriber] = currentSubscriptions
+	}
+
+	currentSubscriptions[msg.topic] = makeMatcher(msg)
+
+	subscriber.OnSubscribe(msg.topic)
+}
+
+func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) {
+	subscriber := msg.payload.(Subscriber)
+
+	currentSubscriptions, ok := b.subscriptions[subscriber]
+	if !ok {
+		return // not subscribed
+	}
+
+	delete(currentSubscriptions, msg.topic)
+
+	if len(currentSubscriptions) == 0 {
+		delete(b.subscriptions, subscriber)
+	}
+
+	subscriber.OnUnsubscribe(msg.topic)
+}
+
+func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) {
+	delete(b.subscriptions, subscriber)
+
+	subscriber.OnUnsubscribe("")
+}
+
+// Accept sends a message to the event bus's channel
+func (b *basicEventBus) accept(msg eventBusMessage) {
+	// Quick atomic check - no mutex needed
+	if atomic.LoadInt32(&b.started) == 0 {
+		fmt.Println("Warning: event bus not started, message ignored")
+		return
+	}
+
+	select {
+	case b.ch <- msg: // Thread-safe channel operation
+		// Message sent successfully
+	case <-b.ctx.Done():
+		fmt.Println("EventBus stopped, message ignored")
+	default:
+		fmt.Println("Warning: event bus channel full, message dropped")
+	}
+}
+
+// Stop gracefully shuts down the event bus
+func (b *basicEventBus) Stop() error {
+	// Use atomic compare-and-swap to prevent double-stop
+	if !atomic.CompareAndSwapInt32(&b.started, 1, 0) {
+		return fmt.Errorf("event bus not started")
+	}
+
+	b.cancel()
+	b.wg.Wait()
+	close(b.ch) // Thread-safe channel operation
+
+	fmt.Println("EventBus stopped")
+	return nil
+}
