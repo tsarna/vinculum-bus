@@ -1,6 +1,7 @@
 package vinculum
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -784,4 +785,106 @@ func TestEventBusPublishSyncBeforeStart(t *testing.T) {
 	if err.Error() != expectedError {
 		t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
 	}
+}
+
+func TestEventBusWithObservability(t *testing.T) {
+	// Create a simple test metrics provider
+	metrics := &testMetricsProvider{
+		counters:   make(map[string]*testCounter),
+		histograms: make(map[string]*testHistogram),
+		gauges:     make(map[string]*testGauge),
+	}
+
+	eventBus := NewEventBusWithObservability(zaptest.NewLogger(t), &ObservabilityConfig{
+		MetricsProvider: metrics,
+		ServiceName:     "test-service",
+		ServiceVersion:  "v1.0.0",
+	})
+
+	err := eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start EventBus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	mockSub := &MockSubscriber{}
+	err = eventBus.Subscribe(mockSub, "test/metrics")
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Test that metrics are recorded
+	eventBus.Publish("test/metrics", "test message")
+	eventBus.PublishSync("test/metrics", "sync test message")
+
+	// Verify metrics were recorded
+	if publishCounter := metrics.counters["eventbus_messages_published_total"]; publishCounter == nil {
+		t.Error("Expected publish counter to be created")
+	} else if publishCounter.value != 1 {
+		t.Errorf("Expected publish counter value to be 1, got %d", publishCounter.value)
+	}
+
+	if syncCounter := metrics.counters["eventbus_messages_published_sync_total"]; syncCounter == nil {
+		t.Error("Expected sync publish counter to be created")
+	} else if syncCounter.value != 1 {
+		t.Errorf("Expected sync publish counter value to be 1, got %d", syncCounter.value)
+	}
+
+	if subscriberGauge := metrics.gauges["eventbus_active_subscribers"]; subscriberGauge == nil {
+		t.Error("Expected subscriber gauge to be created")
+	} else if subscriberGauge.value != 1.0 {
+		t.Errorf("Expected subscriber gauge value to be 1.0, got %f", subscriberGauge.value)
+	}
+}
+
+// Test implementations for observability
+type testMetricsProvider struct {
+	counters   map[string]*testCounter
+	histograms map[string]*testHistogram
+	gauges     map[string]*testGauge
+}
+
+func (p *testMetricsProvider) Counter(name string) Counter {
+	if p.counters[name] == nil {
+		p.counters[name] = &testCounter{}
+	}
+	return p.counters[name]
+}
+
+func (p *testMetricsProvider) Histogram(name string) Histogram {
+	if p.histograms[name] == nil {
+		p.histograms[name] = &testHistogram{}
+	}
+	return p.histograms[name]
+}
+
+func (p *testMetricsProvider) Gauge(name string) Gauge {
+	if p.gauges[name] == nil {
+		p.gauges[name] = &testGauge{}
+	}
+	return p.gauges[name]
+}
+
+type testCounter struct {
+	value int64
+}
+
+func (c *testCounter) Add(ctx context.Context, value int64, labels ...Label) {
+	c.value += value
+}
+
+type testHistogram struct {
+	values []float64
+}
+
+func (h *testHistogram) Record(ctx context.Context, value float64, labels ...Label) {
+	h.values = append(h.values, value)
+}
+
+type testGauge struct {
+	value float64
+}
+
+func (g *testGauge) Set(ctx context.Context, value float64, labels ...Label) {
+	g.value = value
 }
