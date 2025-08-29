@@ -78,13 +78,20 @@ type basicEventBus struct {
 }
 
 func NewEventBus(logger *zap.Logger) EventBus {
-	return NewEventBusWithObservability(logger, nil)
+	return NewEventBusWithConfig(logger, nil)
+}
+
+func NewEventBusWithConfig(logger *zap.Logger, config *EventBusConfig) EventBus {
+	return NewEventBusWithObservability(logger, &ObservabilityConfig{
+		BufferSize: getBufferSize(config),
+	})
 }
 
 func NewEventBusWithObservability(logger *zap.Logger, obs *ObservabilityConfig) EventBus {
+	bufferSize := getObservabilityBufferSize(obs)
 	ctx, cancel := context.WithCancel(context.Background())
 	eb := &basicEventBus{
-		ch:            make(chan eventBusMessage, 100), // Buffered channel to prevent blocking
+		ch:            make(chan eventBusMessage, bufferSize), // Configurable buffered channel
 		ctx:           ctx,
 		cancel:        cancel,
 		subscriptions: make(map[Subscriber]map[string]matcher),
@@ -539,4 +546,20 @@ func (b *basicEventBus) Stop() error {
 
 	b.logger.Info("EventBus stopped")
 	return nil
+}
+
+// getBufferSize returns the buffer size from EventBusConfig, defaulting to 1000
+func getBufferSize(config *EventBusConfig) int {
+	if config != nil && config.BufferSize > 0 {
+		return config.BufferSize
+	}
+	return 1000 // Default buffer size
+}
+
+// getObservabilityBufferSize returns the buffer size from ObservabilityConfig, defaulting to 1000
+func getObservabilityBufferSize(config *ObservabilityConfig) int {
+	if config != nil && config.BufferSize > 0 {
+		return config.BufferSize
+	}
+	return 1000 // Default buffer size
 }

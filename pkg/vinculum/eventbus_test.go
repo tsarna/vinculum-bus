@@ -568,7 +568,7 @@ func TestEventBusChannelBuffer(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Send many messages quickly to test buffering
-	const numMessages = 150 // More than the buffer size of 100
+	const numMessages = 1500 // More than the default buffer size of 1000
 	for i := 0; i < numMessages; i++ {
 		eventBus.Publish(context.Background(), "buffer/test", i)
 	}
@@ -584,6 +584,83 @@ func TestEventBusChannelBuffer(t *testing.T) {
 	}
 
 	t.Logf("Processed %d out of %d messages", len(events), numMessages)
+}
+
+func TestEventBusConfigurableBuffer(t *testing.T) {
+	tests := []struct {
+		name       string
+		bufferSize int
+		expected   int
+	}{
+		{"Default buffer", 0, 1000},
+		{"Custom small buffer", 50, 50},
+		{"Custom large buffer", 2000, 2000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := zaptest.NewLogger(t)
+
+			// Test with EventBusConfig
+			config := &EventBusConfig{BufferSize: tt.bufferSize}
+			eventBus := NewEventBusWithConfig(logger, config)
+			eventBus.Start()
+			defer eventBus.Stop()
+
+			subscriber := NewMockSubscriber()
+			eventBus.Subscribe(context.Background(), subscriber, "config/test")
+			time.Sleep(10 * time.Millisecond)
+
+			// Send messages equal to expected buffer size + 10
+			numMessages := tt.expected + 10
+			for i := 0; i < numMessages; i++ {
+				eventBus.Publish(context.Background(), "config/test", i)
+			}
+
+			time.Sleep(50 * time.Millisecond)
+
+			events := subscriber.GetEvents()
+			t.Logf("Buffer size %d: Processed %d out of %d messages", tt.expected, len(events), numMessages)
+
+			// Should receive at least some messages
+			if len(events) == 0 {
+				t.Error("Expected to receive at least some messages")
+			}
+		})
+	}
+}
+
+func TestEventBusObservabilityConfigurableBuffer(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	// Test with ObservabilityConfig
+	config := &ObservabilityConfig{
+		BufferSize:  500,
+		ServiceName: "test-service",
+	}
+	eventBus := NewEventBusWithObservability(logger, config)
+	eventBus.Start()
+	defer eventBus.Stop()
+
+	subscriber := NewMockSubscriber()
+	eventBus.Subscribe(context.Background(), subscriber, "obs/test")
+	time.Sleep(10 * time.Millisecond)
+
+	// Send messages equal to buffer size + 10
+	numMessages := 510
+	for i := 0; i < numMessages; i++ {
+		eventBus.Publish(context.Background(), "obs/test", i)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	events := subscriber.GetEvents()
+	t.Logf("Observability buffer 500: Processed %d out of %d messages", len(events), numMessages)
+
+	// Should receive at least some messages
+	if len(events) == 0 {
+		t.Error("Expected to receive at least some messages")
+	}
 }
 
 func TestEventBusStopWithPendingMessages(t *testing.T) {

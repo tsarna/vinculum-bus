@@ -32,7 +32,7 @@ Note that this README was written almost entirely by Claude and it makes bold cl
 - **Mock-friendly** for testing
 
 ### ⚡ **Performance**
-- **Buffered channels** for high throughput
+- **Configurable buffering** (1000 messages default) for burst handling
 - **Atomic operations** for counters
 - **Lazy metric creation** for efficiency
 - **Context propagation** for distributed tracing
@@ -226,7 +226,7 @@ eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
 - **4.6+ million messages/second** throughput capability
 - **Zero allocations** in async publish hot path (no observability)
 - **Optimized hot path** with minimal overhead
-- **Configurable buffering** for backpressure handling
+- **Configurable buffering** (default: 1000 messages) with message dropping for backpressure
 
 ## 🔗 Dependencies
 
@@ -236,6 +236,36 @@ eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
 
 ### Optional (Only when used)
 - `go.opentelemetry.io/otel` - OpenTelemetry integration
+
+## ⚙️ Configuration
+
+### Buffer Size Configuration
+
+Control the internal channel buffer size to handle burst traffic:
+
+```go
+// Custom buffer size for high-throughput scenarios
+config := &vinculum.EventBusConfig{
+    BufferSize: 5000, // Default is 1000
+}
+eventBus := vinculum.NewEventBusWithConfig(logger, config)
+```
+
+```go
+// Configure buffer size with observability
+config := &vinculum.ObservabilityConfig{
+    BufferSize:      2000,
+    MetricsProvider: provider,
+    ServiceName:     "my-service",
+}
+eventBus := vinculum.NewEventBusWithObservability(logger, config)
+```
+
+**Buffer Size Guidelines:**
+- **Default (1000)**: Good for most applications (~0.2ms burst capacity)
+- **Small (100-500)**: Memory-constrained environments
+- **Large (2000+)**: High-throughput, burst-heavy workloads
+- **Very Large (10000+)**: Extreme burst scenarios (consider batching instead)
 
 ## 📖 Examples
 
