@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tsarna/mqttpattern"
+	"github.com/amir-yaghoubi/mqttpattern"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

@@ -232,7 +232,7 @@ eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
 
 ### Core (Required)
 - `go.uber.org/zap` - Structured logging
-- `github.com/tsarna/mqttpattern` - Topic pattern matching
+- `github.com/amir-yaghoubi/mqttpattern` - Topic pattern matching
 
 ### Optional (Only when used)
 - `go.opentelemetry.io/otel` - OpenTelemetry integration

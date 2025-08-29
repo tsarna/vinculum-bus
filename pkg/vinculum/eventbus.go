@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tsarna/mqttpattern"
+	"github.com/amir-yaghoubi/mqttpattern"
 	"go.uber.org/zap"
 )
 

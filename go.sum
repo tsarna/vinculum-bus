@@ -1,3 +1,5 @@
+github.com/amir-yaghoubi/mqttpattern v0.0.0-20250829083210-f7d8d46a786e h1:VPK/9drE5hc22bmkOkcvFJKJX9snXuhqjTMWSCL6rPQ=
+github.com/amir-yaghoubi/mqttpattern v0.0.0-20250829083210-f7d8d46a786e/go.mod h1:eTdxCpk5dOaksxMS8HtbTRyjTB1VsgmnpzWtttiHEBY=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
