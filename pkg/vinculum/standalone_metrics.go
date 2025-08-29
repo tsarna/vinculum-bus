@@ -68,6 +68,12 @@ func NewStandaloneMetricsProvider(eventBus EventBus, config *StandaloneMetricsCo
 	}
 }
 
+// SetEventBus sets the EventBus reference for publishing metrics
+// This allows creating the provider before the EventBus to avoid circular dependencies
+func (s *StandaloneMetricsProvider) SetEventBus(eventBus EventBus) {
+	s.eventBus = eventBus
+}
+
 // Start begins the periodic metrics publishing
 func (s *StandaloneMetricsProvider) Start() error {
 	if !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
@@ -151,8 +157,10 @@ func (s *StandaloneMetricsProvider) publishMetrics() {
 		return true
 	})
 
-	// Publish to EventBus with background context
-	s.eventBus.Publish(context.Background(), s.config.MetricsTopic, snapshot)
+	// Publish to EventBus with background context (if EventBus is set)
+	if s.eventBus != nil {
+		s.eventBus.Publish(context.Background(), s.config.MetricsTopic, snapshot)
+	}
 }
 
 // MetricsProvider interface implementation
