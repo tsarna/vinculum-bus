@@ -35,7 +35,7 @@ Note that this README was written almost entirely by Claude and it makes bold cl
 - **Buffered channels** for high throughput
 - **Atomic operations** for counters
 - **Lazy metric creation** for efficiency
-- **Internal tracing** with OpenTelemetry integration
+- **Context propagation** for distributed tracing
 - **Minimal allocations** in hot paths
 
 ## 🚀 Quick Start
@@ -44,12 +44,14 @@ Note that this README was written almost entirely by Claude and it makes bold cl
 package main
 
 import (
+    "context"
     "github.com/tsarna/vinculum/pkg/vinculum"
     "go.uber.org/zap"
 )
 
 func main() {
     logger, _ := zap.NewProduction()
+    ctx := context.Background()
     
     // Create and start EventBus
     eventBus := vinculum.NewEventBus(logger)
@@ -59,12 +61,12 @@ func main() {
     // Create subscriber
     subscriber := vinculum.NewNamedLoggingSubscriber(logger, zap.InfoLevel, "MyService")
     
-    // Subscribe to topic pattern
-    eventBus.Subscribe(subscriber, "users/+userId/events")
+    // Subscribe to topic pattern (context propagation enabled)
+    eventBus.Subscribe(ctx, subscriber, "users/+userId/events")
     
-    // Publish messages
-    eventBus.Publish("users/123/events", "User logged in")
-    eventBus.PublishSync("users/456/events", "User created account")
+    // Publish messages with context
+    eventBus.Publish(ctx, "users/123/events", "User logged in")
+    eventBus.PublishSync(ctx, "users/456/events", "User created account")
 }
 ```
 
@@ -77,12 +79,12 @@ type EventBus interface {
     Start() error
     Stop() error
     
-    Subscribe(subscriber Subscriber, topic string) error
-    Unsubscribe(subscriber Subscriber, topic string) error
-    UnsubscribeAll(subscriber Subscriber) error
+    Subscribe(ctx context.Context, subscriber Subscriber, topic string) error
+    Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error
+    UnsubscribeAll(ctx context.Context, subscriber Subscriber) error
     
-    Publish(topic string, payload any) error      // Async, fire-and-forget
-    PublishSync(topic string, payload any) error  // Sync, waits for completion
+    Publish(ctx context.Context, topic string, payload any) error      // Async, fire-and-forget
+    PublishSync(ctx context.Context, topic string, payload any) error  // Sync, waits for completion
 }
 ```
 
@@ -90,9 +92,9 @@ type EventBus interface {
 
 ```go
 type Subscriber interface {
-    OnSubscribe(topic string) error
-    OnUnsubscribe(topic string) error
-    OnEvent(topic string, message any, fields map[string]string) error
+    OnSubscribe(ctx context.Context, topic string) error
+    OnUnsubscribe(ctx context.Context, topic string) error
+    OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error
 }
 ```
 
@@ -120,10 +122,10 @@ eventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.Observabilit
 ### Parameter Extraction
 ```go
 // Subscribe to pattern
-eventBus.Subscribe(subscriber, "users/+userId/orders/+orderId")
+eventBus.Subscribe(ctx, subscriber, "users/+userId/orders/+orderId")
 
 // Publish message
-eventBus.Publish("users/123/orders/456", orderData)
+eventBus.Publish(ctx, "users/123/orders/456", orderData)
 
 // Subscriber receives:
 // topic = "users/123/orders/456"
@@ -158,7 +160,7 @@ metricsProvider.Start()
 defer metricsProvider.Stop()
 
 // Subscribe to metrics
-eventBus.Subscribe(metricsCollector, "$metrics")
+eventBus.Subscribe(ctx, metricsCollector, "$metrics")
 ```
 
 #### Metrics JSON Format
@@ -188,9 +190,9 @@ eventBus.Subscribe(metricsCollector, "$metrics")
 ```go
 // Mock subscriber for testing
 mockSub := &vinculum.MockSubscriber{}
-eventBus.Subscribe(mockSub, "test/+param")
+eventBus.Subscribe(ctx, mockSub, "test/+param")
 
-eventBus.Publish("test/value", "message")
+eventBus.Publish(ctx, "test/value", "message")
 
 // Verify events
 events := mockSub.GetEvents()
@@ -204,7 +206,7 @@ assert.Equal(t, "value", events[0].Fields["param"])
 ```go
 // Logs all events with structured data
 debugSub := vinculum.NewNamedLoggingSubscriber(logger, zap.DebugLevel, "Debug")
-eventBus.Subscribe(debugSub, "#") // Subscribe to everything
+eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
 ```
 
 ## 🏗️ Architecture
@@ -217,12 +219,13 @@ eventBus.Subscribe(debugSub, "#") // Subscribe to everything
 - **Graceful degradation** - Continues working on errors
 
 ### Performance Characteristics
-- **~100ns** per publish operation (no observability)
+- **~112ns** per publish operation (no observability)
 - **~550ns** per publish operation (with OpenTelemetry observability)  
 - **~160ns** per publish operation (with standalone metrics)
-- **~700ns** per PublishSync operation (waits for completion)
-- **5+ million messages/second** throughput capability
+- **~710ns** per PublishSync operation (waits for completion)
+- **4.6+ million messages/second** throughput capability
 - **Zero allocations** in async publish hot path
+- **Optimized hot path** with minimal overhead
 - **Configurable buffering** for backpressure handling
 
 ## 🔗 Dependencies
@@ -239,13 +242,13 @@ eventBus.Subscribe(debugSub, "#") // Subscribe to everything
 ### Basic Pub/Sub
 ```go
 subscriber := &MySubscriber{}
-eventBus.Subscribe(subscriber, "notifications/+type")
-eventBus.Publish("notifications/email", emailData)
+eventBus.Subscribe(ctx, subscriber, "notifications/+type")
+eventBus.Publish(ctx, "notifications/email", emailData)
 ```
 
 ### Error Handling
 ```go
-err := eventBus.PublishSync("critical/operation", data)
+err := eventBus.PublishSync(ctx, "critical/operation", data)
 if err != nil {
     log.Error("Critical operation failed", zap.Error(err))
 }

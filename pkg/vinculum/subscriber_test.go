@@ -1,6 +1,7 @@
 package vinculum
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -16,15 +17,15 @@ func TestBaseSubscriber(t *testing.T) {
 	// BaseSubscriber provides default no-op implementations
 
 	// These should not panic or cause any issues
-	subscriber.OnSubscribe("test/topic")
-	subscriber.OnUnsubscribe("test/topic")
-	subscriber.OnEvent("test/topic", "message", nil)
-	subscriber.OnEvent("test/topic", "message", map[string]string{"key": "value"})
+	subscriber.OnSubscribe(context.Background(), "test/topic")
+	subscriber.OnUnsubscribe(context.Background(), "test/topic")
+	subscriber.OnEvent(context.Background(), "test/topic", "message", nil)
+	subscriber.OnEvent(context.Background(), "test/topic", "message", map[string]string{"key": "value"})
 
 	// Test with various message types
-	subscriber.OnEvent("test/topic", 123, nil)
-	subscriber.OnEvent("test/topic", []byte("binary data"), nil)
-	subscriber.OnEvent("test/topic", map[string]interface{}{"key": "value"}, nil)
+	subscriber.OnEvent(context.Background(), "test/topic", 123, nil)
+	subscriber.OnEvent(context.Background(), "test/topic", []byte("binary data"), nil)
+	subscriber.OnEvent(context.Background(), "test/topic", map[string]interface{}{"key": "value"}, nil)
 }
 
 func TestMakeMatcherExactMatch(t *testing.T) {
@@ -449,9 +450,9 @@ func TestLoggingSubscriberOnSubscribe(t *testing.T) {
 	subscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "TestSubscriber")
 
 	// This should log without error
-	subscriber.OnSubscribe("test/topic")
-	subscriber.OnSubscribe("user/+userId/profile")
-	subscriber.OnSubscribe("device/#")
+	subscriber.OnSubscribe(context.Background(), "test/topic")
+	subscriber.OnSubscribe(context.Background(), "user/+userId/profile")
+	subscriber.OnSubscribe(context.Background(), "device/#")
 
 	// Test doesn't crash and methods can be called multiple times
 }
@@ -461,9 +462,9 @@ func TestLoggingSubscriberOnUnsubscribe(t *testing.T) {
 	subscriber := NewNamedLoggingSubscriber(logger, zap.WarnLevel, "TestSubscriber")
 
 	// This should log without error
-	subscriber.OnUnsubscribe("test/topic")
-	subscriber.OnUnsubscribe("user/+userId/profile")
-	subscriber.OnUnsubscribe("")
+	subscriber.OnUnsubscribe(context.Background(), "test/topic")
+	subscriber.OnUnsubscribe(context.Background(), "user/+userId/profile")
+	subscriber.OnUnsubscribe(context.Background(), "")
 
 	// Test doesn't crash and methods can be called multiple times
 }
@@ -473,27 +474,27 @@ func TestLoggingSubscriberOnEvent(t *testing.T) {
 	subscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, "TestSubscriber")
 
 	// Test with string message
-	subscriber.OnEvent("test/topic", "string message", nil)
+	subscriber.OnEvent(context.Background(), "test/topic", "string message", nil)
 
 	// Test with map message
 	mapMessage := map[string]interface{}{
 		"key1": "value1",
 		"key2": 42,
 	}
-	subscriber.OnEvent("api/data", mapMessage, nil)
+	subscriber.OnEvent(context.Background(), "api/data", mapMessage, nil)
 
 	// Test with extracted fields
 	fields := map[string]string{
 		"userId": "123",
 		"action": "login",
 	}
-	subscriber.OnEvent("user/123/login", "User logged in", fields)
+	subscriber.OnEvent(context.Background(), "user/123/login", "User logged in", fields)
 
 	// Test with nil message
-	subscriber.OnEvent("empty/topic", nil, nil)
+	subscriber.OnEvent(context.Background(), "empty/topic", nil, nil)
 
 	// Test with byte slice message
-	subscriber.OnEvent("binary/data", []byte("binary data"), nil)
+	subscriber.OnEvent(context.Background(), "binary/data", []byte("binary data"), nil)
 
 	// Test with various field combinations
 	manyFields := map[string]string{
@@ -501,7 +502,7 @@ func TestLoggingSubscriberOnEvent(t *testing.T) {
 		"field2": "value2",
 		"field3": "value3",
 	}
-	subscriber.OnEvent("complex/topic", "complex message", manyFields)
+	subscriber.OnEvent(context.Background(), "complex/topic", "complex message", manyFields)
 
 	// Test doesn't crash and methods can be called multiple times
 }
@@ -520,9 +521,9 @@ func TestLoggingSubscriberDifferentLogLevels(t *testing.T) {
 	for i, level := range levels {
 		subscriber := NewNamedLoggingSubscriber(logger, level.Level(), fmt.Sprintf("Subscriber%d", i))
 
-		subscriber.OnSubscribe("test/topic")
-		subscriber.OnEvent("test/topic", "test message", map[string]string{"param": "value"})
-		subscriber.OnUnsubscribe("test/topic")
+		subscriber.OnSubscribe(context.Background(), "test/topic")
+		subscriber.OnEvent(context.Background(), "test/topic", "test message", map[string]string{"param": "value"})
+		subscriber.OnUnsubscribe(context.Background(), "test/topic")
 	}
 }
 
@@ -541,15 +542,15 @@ func TestLoggingSubscriberWithEventBus(t *testing.T) {
 	infoSubscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "InfoSubscriber")
 
 	// Subscribe to topics
-	eventBus.Subscribe(debugSubscriber, "debug/+level/topic")
-	eventBus.Subscribe(infoSubscriber, "info/events/#")
+	eventBus.Subscribe(context.Background(), debugSubscriber, "debug/+level/topic")
+	eventBus.Subscribe(context.Background(), infoSubscriber, "info/events/#")
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)
 
 	// Publish events
-	eventBus.Publish("debug/high/topic", "Debug message")
-	eventBus.Publish("info/events/user/login", map[string]interface{}{
+	eventBus.Publish(context.Background(), "debug/high/topic", "Debug message")
+	eventBus.Publish(context.Background(), "info/events/user/login", map[string]interface{}{
 		"userId":    "123",
 		"timestamp": "2024-01-01T12:00:00Z",
 	})
@@ -558,7 +559,7 @@ func TestLoggingSubscriberWithEventBus(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Test unsubscribe
-	eventBus.UnsubscribeAll(debugSubscriber)
+	eventBus.UnsubscribeAll(context.Background(), debugSubscriber)
 
 	// Give time for unsubscription to be processed
 	time.Sleep(10 * time.Millisecond)

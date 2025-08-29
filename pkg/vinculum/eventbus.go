@@ -15,12 +15,12 @@ type EventBus interface {
 	Start() error
 	Stop() error
 
-	Subscribe(subscriber Subscriber, topic string) error
-	Unsubscribe(subscriber Subscriber, topic string) error
-	UnsubscribeAll(subscriber Subscriber) error
+	Subscribe(ctx context.Context, subscriber Subscriber, topic string) error
+	Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error
+	UnsubscribeAll(ctx context.Context, subscriber Subscriber) error
 
-	Publish(topic string, payload any) error
-	PublishSync(topic string, payload any) error
+	Publish(ctx context.Context, topic string, payload any) error
+	PublishSync(ctx context.Context, topic string, payload any) error
 }
 
 type messageType int
@@ -34,6 +34,7 @@ const (
 )
 
 type eventBusMessage struct {
+	ctx     context.Context
 	msgType messageType
 	topic   string
 	payload any
@@ -130,14 +131,17 @@ func (b *basicEventBus) Start() error {
 			case msg := <-b.ch: // Thread-safe channel operation
 				switch msg.msgType {
 				case messageTypeEvent:
+					// Extract context from message (guaranteed non-nil by public API)
+					ctx := msg.ctx
+
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
 							if ok, fields := matcher(msg.topic); ok {
-								err := subscriber.OnEvent(msg.topic, msg.payload, fields)
+								err := subscriber.OnEvent(ctx, msg.topic, msg.payload, fields)
 								if err != nil {
 									b.logger.Error("Error in OnEvent", zap.Error(err))
 									if b.errorCounter != nil {
-										b.errorCounter.Add(context.Background(), 1,
+										b.errorCounter.Add(ctx, 1,
 											Label{Key: "operation", Value: "on_event"},
 											Label{Key: "topic", Value: msg.topic},
 										)
@@ -152,7 +156,12 @@ func (b *basicEventBus) Start() error {
 					if err := b.doPublishSync(msg); err != nil {
 						b.logger.Error("Error in doPublishSync", zap.Error(err))
 						if b.errorCounter != nil {
-							b.errorCounter.Add(context.Background(), 1,
+							// Use context from message if available
+							ctx := msg.ctx
+							if ctx == nil {
+								ctx = context.Background()
+							}
+							b.errorCounter.Add(ctx, 1,
 								Label{Key: "operation", Value: "publish_sync"},
 								Label{Key: "topic", Value: msg.topic},
 							)
@@ -163,7 +172,12 @@ func (b *basicEventBus) Start() error {
 					if err := b.doSubscribe(msg); err != nil {
 						b.logger.Error("Error in doSubscribe", zap.Error(err))
 						if b.errorCounter != nil {
-							b.errorCounter.Add(context.Background(), 1,
+							// Use context from message if available
+							ctx := msg.ctx
+							if ctx == nil {
+								ctx = context.Background()
+							}
+							b.errorCounter.Add(ctx, 1,
 								Label{Key: "operation", Value: "subscribe"},
 								Label{Key: "topic", Value: msg.topic},
 							)
@@ -173,7 +187,12 @@ func (b *basicEventBus) Start() error {
 					if err := b.doUnsubscribe(msg); err != nil {
 						b.logger.Error("Error in doUnsubscribe", zap.Error(err))
 						if b.errorCounter != nil {
-							b.errorCounter.Add(context.Background(), 1,
+							// Use context from message if available
+							ctx := msg.ctx
+							if ctx == nil {
+								ctx = context.Background()
+							}
+							b.errorCounter.Add(ctx, 1,
 								Label{Key: "operation", Value: "unsubscribe"},
 								Label{Key: "topic", Value: msg.topic},
 							)
@@ -192,8 +211,11 @@ func (b *basicEventBus) Start() error {
 	return nil
 }
 
-func (b *basicEventBus) Publish(topic string, payload any) error {
-	ctx := context.Background()
+func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) error {
+	// Use the provided context instead of creating a new one
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Start tracing span if available
 	if b.tracingProvider != nil {
@@ -216,12 +238,16 @@ func (b *basicEventBus) Publish(topic string, payload any) error {
 		msgType: messageTypeEvent,
 		topic:   topic,
 		payload: payload,
+		ctx:     ctx,
 	})
 	return nil
 }
 
-func (b *basicEventBus) PublishSync(topic string, payload any) error {
-	ctx := context.Background()
+func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload any) error {
+	// Use the provided context instead of creating a new one
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	start := time.Now()
 
 	// Start tracing span if available
@@ -244,6 +270,7 @@ func (b *basicEventBus) PublishSync(topic string, payload any) error {
 			payload:    payload,
 			responseCh: responseCh,
 		},
+		ctx: ctx,
 	}, responseCh)
 
 	err := <-responseCh
@@ -277,8 +304,11 @@ func (b *basicEventBus) PublishSync(topic string, payload any) error {
 	return err
 }
 
-func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
-	ctx := context.Background()
+func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, topic string) error {
+	// Use the provided context instead of creating a new one
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Start tracing span if available
 	var span Span
@@ -305,6 +335,7 @@ func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
 			subscriber: subscriber,
 			responseCh: responseCh,
 		},
+		ctx: ctx,
 	}, responseCh)
 
 	err := <-responseCh
@@ -333,7 +364,11 @@ func (b *basicEventBus) Subscribe(subscriber Subscriber, topic string) error {
 	return err
 }
 
-func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) error {
+func (b *basicEventBus) Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	responseCh := make(chan error, 1)
 	b.acceptWithResponse(eventBusMessage{
 		msgType: messageTypeUnsubscribe,
@@ -342,6 +377,7 @@ func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) error {
 			subscriber: subscriber,
 			responseCh: responseCh,
 		},
+		ctx: ctx,
 	}, responseCh)
 
 	return <-responseCh
@@ -350,6 +386,9 @@ func (b *basicEventBus) Unsubscribe(subscriber Subscriber, topic string) error {
 func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 	req := msg.payload.(subscriptionRequest)
 	subscriber := req.subscriber
+
+	// Extract context from the message (guaranteed non-nil by public API)
+	ctx := msg.ctx
 
 	var currentSubscriptions map[string]matcher
 	var ok bool
@@ -364,10 +403,10 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 	// Update subscriber gauge
 	if b.subscriberGauge != nil {
 		subscriberCount := float64(len(b.subscriptions))
-		b.subscriberGauge.Set(context.Background(), subscriberCount)
+		b.subscriberGauge.Set(ctx, subscriberCount)
 	}
 
-	err := subscriber.OnSubscribe(msg.topic)
+	err := subscriber.OnSubscribe(ctx, msg.topic)
 	req.responseCh <- err
 	return err
 }
@@ -375,6 +414,9 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 	req := msg.payload.(subscriptionRequest)
 	subscriber := req.subscriber
+
+	// Extract context from the message (guaranteed non-nil by public API)
+	ctx := msg.ctx
 
 	currentSubscriptions, ok := b.subscriptions[subscriber]
 	if !ok {
@@ -391,16 +433,19 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 	// Update subscriber gauge
 	if b.subscriberGauge != nil {
 		subscriberCount := float64(len(b.subscriptions))
-		b.subscriberGauge.Set(context.Background(), subscriberCount)
+		b.subscriberGauge.Set(ctx, subscriberCount)
 	}
 
-	err := subscriber.OnUnsubscribe(msg.topic)
+	err := subscriber.OnUnsubscribe(ctx, msg.topic)
 	req.responseCh <- err
 	return err
 }
 
 func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
 	req := msg.payload.(syncPublishRequest)
+
+	// Extract context from the message (guaranteed non-nil by public API)
+	ctx := msg.ctx
 
 	// Process the message just like a regular event, but track any errors
 	var publishError error
@@ -410,7 +455,7 @@ func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
 		for _, matcher := range b.subscriptions[subscriber] {
 			if ok, fields := matcher(msg.topic); ok {
 				eventCount++
-				if err := subscriber.OnEvent(msg.topic, req.payload, fields); err != nil {
+				if err := subscriber.OnEvent(ctx, msg.topic, req.payload, fields); err != nil {
 					if publishError == nil {
 						publishError = err // Store first error
 					} else {
@@ -428,10 +473,14 @@ func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
 	return publishError
 }
 
-func (b *basicEventBus) UnsubscribeAll(subscriber Subscriber) error {
+func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscriber) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	delete(b.subscriptions, subscriber)
 
-	return subscriber.OnUnsubscribe("")
+	return subscriber.OnUnsubscribe(ctx, "")
 }
 
 // accept sends a message to the event bus's channel (for publish operations - no response needed)

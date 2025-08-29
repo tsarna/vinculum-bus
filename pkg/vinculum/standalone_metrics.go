@@ -151,8 +151,8 @@ func (s *StandaloneMetricsProvider) publishMetrics() {
 		return true
 	})
 
-	// Publish to EventBus
-	s.eventBus.Publish(s.config.MetricsTopic, snapshot)
+	// Publish to EventBus with background context
+	s.eventBus.Publish(context.Background(), s.config.MetricsTopic, snapshot)
 }
 
 // MetricsProvider interface implementation
