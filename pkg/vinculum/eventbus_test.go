@@ -888,3 +888,131 @@ type testGauge struct {
 func (g *testGauge) Set(ctx context.Context, value float64, labels ...Label) {
 	g.value = value
 }
+
+// testMetricsSubscriber captures metrics snapshots for testing
+type testMetricsSubscriber struct {
+	BaseSubscriber
+	receivedMetrics *MetricsSnapshot
+	metricsMutex    *sync.Mutex
+	metricsReceived *bool
+}
+
+func (s *testMetricsSubscriber) OnEvent(topic string, message any, fields map[string]string) error {
+	if topic == "$metrics" {
+		if snapshot, ok := message.(MetricsSnapshot); ok {
+			s.metricsMutex.Lock()
+			*s.receivedMetrics = snapshot
+			*s.metricsReceived = true
+			s.metricsMutex.Unlock()
+		}
+	}
+	return nil
+}
+
+func TestStandaloneMetricsProvider(t *testing.T) {
+	eventBus := NewEventBus(zaptest.NewLogger(t))
+	err := eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start EventBus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	// Create standalone metrics provider with fast interval for testing
+	metricsProvider := NewStandaloneMetricsProvider(eventBus, &StandaloneMetricsConfig{
+		Interval:     50 * time.Millisecond, // Fast for testing
+		MetricsTopic: "$metrics",
+		ServiceName:  "test-service",
+	})
+
+	err = metricsProvider.Start()
+	if err != nil {
+		t.Fatalf("Failed to start metrics provider: %v", err)
+	}
+	defer metricsProvider.Stop()
+
+	// Create observable EventBus using the standalone provider
+	observableEventBus := NewEventBusWithObservability(zaptest.NewLogger(t), &ObservabilityConfig{
+		MetricsProvider: metricsProvider,
+		ServiceName:     "test-service",
+		ServiceVersion:  "v1.0.0",
+	})
+
+	err = observableEventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start observable EventBus: %v", err)
+	}
+	defer observableEventBus.Stop()
+
+	// Subscribe to metrics topic
+	var receivedMetrics MetricsSnapshot
+	var metricsMutex sync.Mutex
+	metricsReceived := false
+
+	// Custom subscriber to capture metrics
+	metricsSubscriber := &testMetricsSubscriber{
+		receivedMetrics: &receivedMetrics,
+		metricsMutex:    &metricsMutex,
+		metricsReceived: &metricsReceived,
+	}
+
+	eventBus.Subscribe(metricsSubscriber, "$metrics")
+
+	// Generate some metrics
+	testSub := &MockSubscriber{}
+	observableEventBus.Subscribe(testSub, "test/topic")
+	observableEventBus.Publish("test/topic", "test message")
+	observableEventBus.PublishSync("test/topic", "sync test message")
+
+	// Wait a bit for operations to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Wait for metrics to be published (at least one cycle)
+	deadline := time.Now().Add(200 * time.Millisecond) // Wait for at least 4 cycles
+	for time.Now().Before(deadline) {
+		metricsMutex.Lock()
+		received := metricsReceived
+		metricsMutex.Unlock()
+
+		if received {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	metricsMutex.Lock()
+	defer metricsMutex.Unlock()
+
+	if !metricsReceived {
+		t.Fatal("Expected to receive metrics snapshot")
+	}
+
+	// Verify metrics content
+	if receivedMetrics.ServiceName != "test-service" {
+		t.Errorf("Expected service name 'test-service', got '%s'", receivedMetrics.ServiceName)
+	}
+
+	if receivedMetrics.Counters == nil {
+		t.Error("Expected counters to be present")
+	}
+
+	if receivedMetrics.Histograms == nil {
+		t.Error("Expected histograms to be present")
+	}
+
+	if receivedMetrics.Gauges == nil {
+		t.Error("Expected gauges to be present")
+	}
+
+	// Check for specific metrics
+	if publishCount, exists := receivedMetrics.Counters["eventbus_messages_published_total"]; !exists || publishCount < 1 {
+		t.Errorf("Expected published messages counter >= 1, got %d", publishCount)
+	}
+
+	if syncCount, exists := receivedMetrics.Counters["eventbus_messages_published_sync_total"]; !exists || syncCount < 1 {
+		t.Errorf("Expected sync published messages counter >= 1, got %d", syncCount)
+	}
+
+	if subscriberCount, exists := receivedMetrics.Gauges["eventbus_active_subscribers"]; !exists || subscriberCount < 1 {
+		t.Errorf("Expected active subscribers gauge >= 1, got %f", subscriberCount)
+	}
+}
