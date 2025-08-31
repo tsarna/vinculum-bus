@@ -1,6 +1,7 @@
 package websockets
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -168,5 +169,121 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 		assert.NotNil(t, listener)
 		assert.Equal(t, 512, listener.config.queueSize)
 		assert.Equal(t, 45*time.Second, listener.config.pingInterval)
+	})
+
+	t.Run("event authorization configuration", func(t *testing.T) {
+		// Default should be DenyAllEvents
+		config := NewListenerConfig()
+		testMsg := &WireMessage{Topic: "test/topic", Data: "test message"}
+		modifiedMsg, err := config.eventAuth(context.Background(), testMsg)
+		assert.Error(t, err)
+		assert.Nil(t, modifiedMsg)
+		assert.Contains(t, err.Error(), "not allowed")
+
+		// Test that we can set different auth functions
+		config.WithEventAuth(AllowAllEvents)
+		assert.NotNil(t, config.eventAuth)
+
+		config.WithEventAuth(DropAllEvents)
+		assert.NotNil(t, config.eventAuth)
+
+		config.WithEventAuth(AllowTopicPrefix("client/"))
+		assert.NotNil(t, config.eventAuth)
+	})
+
+	t.Run("subscription controller configuration", func(t *testing.T) {
+		// Default should be PassthroughSubscriptionController
+		config := NewListenerConfig()
+		assert.NotNil(t, config.subscriptionController)
+
+		// Test that we can set different subscription controller factories
+		config.WithSubscriptionController(NewPassthroughSubscriptionController)
+		assert.NotNil(t, config.subscriptionController)
+	})
+
+	t.Run("initial subscriptions configuration", func(t *testing.T) {
+		// Default should be no initial subscriptions
+		config := NewListenerConfig()
+		assert.Empty(t, config.initialSubscriptions)
+
+		// Test setting initial subscriptions
+		config.WithInitialSubscriptions("system/alerts", "server/status", "notifications/+")
+		assert.Len(t, config.initialSubscriptions, 3)
+		assert.Equal(t, []string{"system/alerts", "server/status", "notifications/+"}, config.initialSubscriptions)
+
+		// Test that the slice is copied (not shared)
+		originalTopics := []string{"topic1", "topic2"}
+		config2 := NewListenerConfig()
+		config2.WithInitialSubscriptions(originalTopics...)
+		originalTopics[0] = "modified"
+		assert.Equal(t, []string{"topic1", "topic2"}, config2.initialSubscriptions)
+
+		// Test empty topics (should not change existing subscriptions)
+		config3 := NewListenerConfig().WithInitialSubscriptions("existing")
+		config3.WithInitialSubscriptions() // Empty call
+		assert.Equal(t, []string{"existing"}, config3.initialSubscriptions)
+
+		// Test overwriting existing subscriptions
+		config4 := NewListenerConfig()
+		config4.WithInitialSubscriptions("first", "second")
+		config4.WithInitialSubscriptions("third", "fourth")
+		assert.Equal(t, []string{"third", "fourth"}, config4.initialSubscriptions)
+
+		// Test fluent interface
+		config5 := NewListenerConfig().
+			WithEventBus(eventBus).
+			WithLogger(logger).
+			WithInitialSubscriptions("fluent/test")
+
+		assert.Equal(t, []string{"fluent/test"}, config5.initialSubscriptions)
+		assert.Equal(t, eventBus, config5.eventBus)
+		assert.Equal(t, logger, config5.logger)
+	})
+
+	t.Run("message transforms configuration", func(t *testing.T) {
+		// Default should be no message transforms
+		config := NewListenerConfig()
+		assert.Empty(t, config.messageTransforms)
+
+		// Test setting message transforms
+		transform1 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
+			return msg, true
+		}
+		transform2 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
+			return msg, false
+		}
+		transform3 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
+			return nil, true
+		}
+
+		config.WithMessageTransforms(transform1, transform2, transform3)
+		assert.Len(t, config.messageTransforms, 3)
+
+		// Test that functions are copied (not shared reference)
+		originalTransforms := []MessageTransformFunc{transform1}
+		config2 := NewListenerConfig()
+		config2.WithMessageTransforms(originalTransforms...)
+		assert.Len(t, config2.messageTransforms, 1)
+
+		// Test empty transforms (should not change existing transforms)
+		config3 := NewListenerConfig().WithMessageTransforms(transform1)
+		config3.WithMessageTransforms() // Empty call
+		assert.Len(t, config3.messageTransforms, 1)
+
+		// Test overwriting existing transforms
+		config4 := NewListenerConfig()
+		config4.WithMessageTransforms(transform1, transform2)
+		config4.WithMessageTransforms(transform3)
+		assert.Len(t, config4.messageTransforms, 1)
+
+		// Test fluent interface
+		config5 := NewListenerConfig().
+			WithEventBus(eventBus).
+			WithLogger(logger).
+			WithMessageTransforms(transform1)
+
+		assert.Len(t, config5.messageTransforms, 1)
+		assert.Equal(t, eventBus, config5.eventBus)
+		assert.Equal(t, logger, config5.logger)
 	})
 }

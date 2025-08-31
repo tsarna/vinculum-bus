@@ -12,12 +12,16 @@ import (
 // Use NewListenerConfig() to create a new configuration and chain methods
 // to set the required parameters before calling Build().
 type ListenerConfig struct {
-	eventBus     vinculum.EventBus
-	logger       *zap.Logger
-	queueSize    int
-	pingInterval time.Duration
-	readTimeout  time.Duration
-	writeTimeout time.Duration
+	eventBus               vinculum.EventBus
+	logger                 *zap.Logger
+	queueSize              int
+	pingInterval           time.Duration
+	readTimeout            time.Duration
+	writeTimeout           time.Duration
+	eventAuth              EventAuthFunc
+	subscriptionController SubscriptionControllerFactory
+	initialSubscriptions   []string
+	messageTransforms      []MessageTransformFunc
 }
 
 const (
@@ -48,13 +52,19 @@ const (
 //	    WithLogger(logger).
 //	    WithQueueSize(512).
 //	    WithPingInterval(45 * time.Second).
+//	    WithEventAuth(AllowTopicPrefix("client/")).
+//	    WithSubscriptionController(myControllerFactory).
+//	    WithInitialSubscriptions("system/alerts", "server/status").
+//	    WithMessageTransforms(filterSensitive, addTimestamp).
 //	    Build()
 func NewListenerConfig() *ListenerConfig {
 	return &ListenerConfig{
-		queueSize:    DefaultQueueSize,
-		pingInterval: DefaultPingInterval,
-		readTimeout:  DefaultReadTimeout,
-		writeTimeout: DefaultWriteTimeout,
+		queueSize:              DefaultQueueSize,
+		pingInterval:           DefaultPingInterval,
+		readTimeout:            DefaultReadTimeout,
+		writeTimeout:           DefaultWriteTimeout,
+		eventAuth:              DenyAllEvents,                        // Secure default: deny all client events
+		subscriptionController: NewPassthroughSubscriptionController, // Default: allow all subscriptions
 	}
 }
 
@@ -117,6 +127,100 @@ func (c *ListenerConfig) WithReadTimeout(timeout time.Duration) *ListenerConfig 
 func (c *ListenerConfig) WithWriteTimeout(timeout time.Duration) *ListenerConfig {
 	if timeout > 0 {
 		c.writeTimeout = timeout
+	}
+	return c
+}
+
+// WithEventAuth sets the event authorization function for client-published events.
+// This function determines whether clients are allowed to publish events to the EventBus
+// and can modify events before publishing.
+//
+// The function receives the original message and returns:
+//   - (*WireMessage, nil): Use the returned modified message
+//   - (nil, nil): Use the original message unchanged
+//   - (nil, error): Deny the event with the given error
+//
+// Predefined options:
+//   - DenyAllEvents: Blocks all client events (secure default)
+//   - AllowAllEvents: Allows all client events (development/trusted environments)
+//   - AllowTopicPrefix("prefix/"): Only allows events to topics with specific prefix
+//
+// Default: DenyAllEvents (secure)
+func (c *ListenerConfig) WithEventAuth(authFunc EventAuthFunc) *ListenerConfig {
+	if authFunc != nil {
+		c.eventAuth = authFunc
+	}
+	return c
+}
+
+// WithSubscriptionController sets the subscription controller factory for managing
+// client subscriptions and unsubscriptions. The factory function receives the
+// EventBus and logger and should return a SubscriptionController instance.
+//
+// The controller can:
+//   - Allow/deny subscription requests
+//   - Rewrite subscriptions to different topic patterns
+//   - Split one subscription into multiple subscriptions
+//   - Maintain state for complex subscription policies
+//
+// Default: NewPassthroughSubscriptionController (allows all subscriptions)
+func (c *ListenerConfig) WithSubscriptionController(factory SubscriptionControllerFactory) *ListenerConfig {
+	if factory != nil {
+		c.subscriptionController = factory
+	}
+	return c
+}
+
+// WithInitialSubscriptions sets the topic patterns that new WebSocket connections
+// should be automatically subscribed to when they connect. These subscriptions
+// happen automatically without client request and bypass the subscription controller.
+//
+// This is useful for:
+//   - Pushing server-side events to all clients
+//   - Providing default subscriptions for convenience
+//   - Broadcasting system notifications
+//
+// Example:
+//
+//	config.WithInitialSubscriptions("system/alerts", "server/status")
+//
+// Default: No initial subscriptions
+func (c *ListenerConfig) WithInitialSubscriptions(topics ...string) *ListenerConfig {
+	if len(topics) > 0 {
+		c.initialSubscriptions = make([]string, len(topics))
+		copy(c.initialSubscriptions, topics)
+	}
+	return c
+}
+
+// WithMessageTransforms sets the message transformation functions that will be
+// applied to outbound messages from the EventBus before sending to WebSocket clients.
+// Transform functions are called in the order they are provided.
+//
+// Each function receives a *WebSocketMessage and returns:
+//   - *WebSocketMessage: The transformed message (nil to drop the message)
+//   - bool: Whether to continue calling subsequent transforms (ignored if message is nil)
+//
+// Use cases:
+//   - Message filtering based on content or topic
+//   - Adding metadata or enriching messages
+//   - Format conversion or data transformation
+//   - Rate limiting or throttling
+//   - Message routing or duplication
+//
+// Example:
+//
+//	config.WithMessageTransforms(
+//	    filterSensitiveData,
+//	    addTimestamp,
+//	    enrichWithMetadata,
+//	)
+//
+// Default: No transforms (messages sent as-is)
+func (c *ListenerConfig) WithMessageTransforms(transforms ...MessageTransformFunc) *ListenerConfig {
+	if len(transforms) > 0 {
+		c.messageTransforms = make([]MessageTransformFunc, len(transforms))
+		copy(c.messageTransforms, transforms)
 	}
 	return c
 }

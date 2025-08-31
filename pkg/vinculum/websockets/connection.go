@@ -3,6 +3,7 @@ package websockets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,11 @@ import (
 	"github.com/tsarna/vinculum/pkg/vinculum"
 	"go.uber.org/zap"
 )
+
+// ErrMessageDropped is returned by translateMessage when the transform pipeline
+// drops a message. This is not a real error but a signal that the message
+// should not be sent.
+var ErrMessageDropped = errors.New("message dropped by transform pipeline")
 
 // WebSocketMessage represents a message to be sent over the WebSocket connection.
 type WebSocketMessage struct {
@@ -26,12 +32,13 @@ type WebSocketMessage struct {
 // them to the WebSocket client. It also handles incoming messages from the WebSocket client
 // and can publish them to the EventBus.
 type Connection struct {
-	ctx      context.Context
-	conn     *websocket.Conn
-	eventBus vinculum.EventBus
-	logger   *zap.Logger
-	config   *ListenerConfig
-	eventMsg map[string]any
+	ctx                    context.Context
+	conn                   *websocket.Conn
+	eventBus               vinculum.EventBus
+	logger                 *zap.Logger
+	config                 *ListenerConfig
+	subscriptionController SubscriptionController
+	eventMsg               map[string]any
 
 	// Channel for outbound messages to avoid blocking EventBus
 	outbound chan WebSocketMessage
@@ -47,29 +54,45 @@ type Connection struct {
 //   - ctx: Context for the connection lifecycle
 //   - conn: The WebSocket connection to manage
 //   - config: The ListenerConfig containing EventBus and Logger
+//   - subscriptionController: The SubscriptionController for managing subscriptions
 //
 // Returns a new Connection instance that implements the Subscriber interface.
-func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerConfig) *Connection {
+func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerConfig, subscriptionController SubscriptionController) *Connection {
 	return &Connection{
-		ctx:      ctx,
-		conn:     conn,
-		eventBus: config.eventBus,
-		logger:   config.logger,
-		config:   config,
-		eventMsg: make(map[string]any),                          // precreated and reused to avoid allocations
-		outbound: make(chan WebSocketMessage, config.queueSize), // Buffered channel to prevent blocking
-		done:     make(chan struct{}),
+		ctx:                    ctx,
+		conn:                   conn,
+		eventBus:               config.eventBus,
+		logger:                 config.logger,
+		config:                 config,
+		subscriptionController: subscriptionController,
+		eventMsg:               make(map[string]any),                          // precreated and reused to avoid allocations
+		outbound:               make(chan WebSocketMessage, config.queueSize), // Buffered channel to prevent blocking
+		done:                   make(chan struct{}),
 	}
 }
 
 // Start begins handling the WebSocket connection.
-// This method automatically subscribes to all topics ("#") and handles
-// both incoming and outbound messages for the WebSocket client.
+// This method automatically subscribes to any configured initial subscriptions
+// and handles both incoming and outbound messages for the WebSocket client.
 //
 // This method blocks until the connection is closed, running the message reader
 // directly in the calling goroutine for efficiency.
 func (c *Connection) Start() {
 	c.logger.Debug("Starting WebSocket connection handler")
+
+	// Perform initial subscriptions (bypass subscription controller since these are server-initiated)
+	for _, topic := range c.config.initialSubscriptions {
+		if err := c.eventBus.Subscribe(c.ctx, c, topic); err != nil {
+			c.logger.Warn("Failed to create initial subscription",
+				zap.String("topic", topic),
+				zap.Error(err),
+			)
+		} else {
+			c.logger.Debug("Created initial subscription",
+				zap.String("topic", topic),
+			)
+		}
+	}
 
 	// Start the message sender goroutine for outbound messages and ping handling
 	go c.messageSender()
@@ -247,6 +270,13 @@ func (c *Connection) sendMessage(msg WebSocketMessage) error {
 	rawMessage := msg.RawMessage
 	if rawMessage == nil {
 		rawMessage, err = c.translateMessage(msg)
+		if err != nil {
+			// Check if this is a "message dropped" error (not a real error)
+			if errors.Is(err, ErrMessageDropped) {
+				return nil // Treat as successful no-op
+			}
+			return err // Real translation error
+		}
 	}
 
 	if err == nil {
@@ -359,9 +389,61 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 	return nil
 }
 
+// applyMessageTransforms applies the configured message transformation pipeline
+// to an outbound WebSocket message. Transform functions are called in order
+// until one returns false for continue or the message becomes nil.
+func (c *Connection) applyMessageTransforms(msg *WebSocketMessage) *WebSocketMessage {
+	if len(c.config.messageTransforms) == 0 {
+		return msg // No transforms configured
+	}
+
+	current := msg
+	for i, transform := range c.config.messageTransforms {
+		if current == nil {
+			// Previous transform dropped the message, stop processing
+			c.logger.Debug("Message transform pipeline stopped due to nil message",
+				zap.Int("transform_index", i),
+			)
+			break
+		}
+
+		transformed, continueProcessing := transform(current)
+		current = transformed
+
+		if current == nil {
+			// Transform dropped the message
+			c.logger.Debug("Message dropped by transform function",
+				zap.Int("transform_index", i),
+			)
+			break
+		}
+
+		if !continueProcessing {
+			// Transform requested to stop processing
+			c.logger.Debug("Message transform pipeline stopped by transform function",
+				zap.Int("transform_index", i),
+			)
+			break
+		}
+	}
+
+	return current
+}
+
 func (c *Connection) translateMessage(msg WebSocketMessage) (any, error) {
-	c.eventMsg["t"] = msg.Topic
-	c.eventMsg["d"] = msg.Message
+	// Apply message transformation pipeline
+	transformedMsg := c.applyMessageTransforms(&msg)
+	if transformedMsg == nil {
+		// Message was dropped by transform pipeline
+		c.logger.Debug("Message dropped by transform pipeline",
+			zap.String("topic", msg.Topic),
+		)
+		return nil, ErrMessageDropped
+	}
+
+	// Use the transformed message for translation
+	c.eventMsg["t"] = transformedMsg.Topic
+	c.eventMsg["d"] = transformedMsg.Message
 
 	return c.eventMsg, nil
 }
@@ -381,7 +463,18 @@ func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, 
 		RawMessage: response,
 	}
 
-	c.sendMessage(msg)
+	// Send response through the outbound channel to ensure thread safety
+	// All WebSocket writes must go through the messageSender goroutine
+	select {
+	case c.outbound <- msg:
+		// Response queued successfully
+	default:
+		// Channel full, log warning but don't block message reader
+		c.logger.Warn("Outbound channel full, dropping response message",
+			zap.String("response_kind", response.Kind),
+			zap.Any("request_id", request.Id),
+		)
+	}
 }
 
 func handleRequest(c *Connection, ctx context.Context, request WireMessage) {
@@ -393,10 +486,23 @@ func handleRequest(c *Connection, ctx context.Context, request WireMessage) {
 			err = fmt.Errorf("topic is required")
 		} else if request.Data == nil {
 			err = fmt.Errorf("data is required")
-		}
+		} else {
+			// Apply event authorization
+			modifiedMsg, authErr := c.config.eventAuth(ctx, &request)
 
-		if err == nil {
-			err = c.eventBus.Publish(ctx, request.Topic, request.Data)
+			if authErr != nil {
+				// Event denied by authorization function
+				err = authErr
+			} else if modifiedMsg == nil {
+				// Event silently dropped by authorization function (nil return with no error)
+				// Don't publish anything, but still send ACK response (err remains nil)
+			} else {
+				// Event authorized, use modified message if provided
+				msgToPublish := modifiedMsg
+
+				// Publish to EventBus
+				err = c.eventBus.Publish(ctx, msgToPublish.Topic, msgToPublish.Data)
+			}
 		}
 
 		if request.Id == nil {
@@ -405,9 +511,19 @@ func handleRequest(c *Connection, ctx context.Context, request WireMessage) {
 	case MessageKindAck:
 		err = nil
 	case MessageKindSubscribe:
-		err = c.eventBus.Subscribe(ctx, c, request.Topic)
+		// Use subscription controller to validate/modify the subscription
+		err = c.subscriptionController.Subscribe(ctx, c, request.Topic)
+		if err == nil {
+			// Controller approved, perform the actual subscription
+			err = c.eventBus.Subscribe(ctx, c, request.Topic)
+		}
 	case MessageKindUnsubscribe:
-		err = c.eventBus.Unsubscribe(ctx, c, request.Topic)
+		// Use subscription controller to validate/modify the unsubscription
+		err = c.subscriptionController.Unsubscribe(ctx, c, request.Topic)
+		if err == nil {
+			// Controller approved, perform the actual unsubscription
+			err = c.eventBus.Unsubscribe(ctx, c, request.Topic)
+		}
 	default:
 		err = fmt.Errorf("unsupported request type: %s", request.Kind)
 	}

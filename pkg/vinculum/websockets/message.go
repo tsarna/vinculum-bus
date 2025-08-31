@@ -20,7 +20,7 @@ const (
 // This follows the Vinculum WebSocket protocol with short field names
 // for efficiency.
 type WireMessage struct {
-	Kind  string `json:"k"`           // Message kind/type (see MessageKind constants)
+	Kind  string `json:"k,omitempty"` // Message kind/type (see MessageKind constants)
 	Topic string `json:"t,omitempty"` // Topic or topic pattern
 	Data  any    `json:"d,omitempty"` // Event data/payload
 	Id    any    `json:"i,omitempty"` // Message identifier for request/response matching

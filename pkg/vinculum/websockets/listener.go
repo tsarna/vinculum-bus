@@ -15,9 +15,10 @@ import (
 // It manages the lifecycle of WebSocket connections, authentication, and message routing
 // between WebSocket clients and the EventBus.
 type Listener struct {
-	eventBus vinculum.EventBus
-	logger   *zap.Logger
-	config   *ListenerConfig
+	eventBus               vinculum.EventBus
+	logger                 *zap.Logger
+	config                 *ListenerConfig
+	subscriptionController SubscriptionController
 
 	// Connection tracking for graceful shutdown
 	connections  map[*Connection]struct{}
@@ -35,11 +36,12 @@ type Listener struct {
 // Returns a new Listener instance ready to accept WebSocket connections.
 func newListener(config *ListenerConfig) *Listener {
 	return &Listener{
-		eventBus:    config.eventBus,
-		logger:      config.logger,
-		config:      config,
-		connections: make(map[*Connection]struct{}),
-		shutdown:    make(chan struct{}),
+		eventBus:               config.eventBus,
+		logger:                 config.logger,
+		config:                 config,
+		subscriptionController: config.subscriptionController(config.eventBus, config.logger),
+		connections:            make(map[*Connection]struct{}),
+		shutdown:               make(chan struct{}),
 	}
 }
 
@@ -84,7 +86,7 @@ func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create and track the connection
-	connection := newConnection(r.Context(), conn, l.config)
+	connection := newConnection(r.Context(), conn, l.config, l.subscriptionController)
 
 	// Add connection to tracking map
 	l.connMutex.Lock()
