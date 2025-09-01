@@ -3,7 +3,6 @@ package websockets
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -12,11 +11,6 @@ import (
 	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
 	"go.uber.org/zap"
 )
-
-// ErrMessageDropped is returned by translateMessage when the transform pipeline
-// drops a message. This is not a real error but a signal that the message
-// should not be sent.
-var ErrMessageDropped = errors.New("message dropped by transform pipeline")
 
 // WebSocketMessage represents a message to be sent over the WebSocket connection.
 type WebSocketMessage struct {
@@ -69,9 +63,17 @@ func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerCo
 	}
 
 	// Create the subscriber wrapper chain:
-	// AsyncQueueingSubscriber (async processing + periodic ticks)
-	// Note: WebSocket transforms are still handled in Connection.sendMessage() for now
-	asyncSubscriber := subutils.NewAsyncQueueingSubscriber(baseConnection, config.queueSize)
+	// 1. TransformingSubscriber (applies new message transforms if any)
+	// 2. AsyncQueueingSubscriber (async processing + periodic ticks)
+
+	var wrappedSubscriber vinculum.Subscriber = baseConnection
+
+	// Add TransformingSubscriber if new transforms are configured
+	if len(config.messageTransforms) > 0 {
+		wrappedSubscriber = subutils.NewTransformingSubscriber(wrappedSubscriber, config.messageTransforms...)
+	}
+
+	asyncSubscriber := subutils.NewAsyncQueueingSubscriber(wrappedSubscriber, config.queueSize)
 
 	// Add ticker for ping/pong if configured and start processing
 	if config.pingInterval > 0 {
@@ -213,39 +215,6 @@ func (c *Connection) sendErrorResponse(id any, errorMsg string) {
 	}
 }
 
-// sendMessage sends a message over the WebSocket connection.
-func (c *Connection) sendMessage(msg WebSocketMessage) error {
-	var err error
-	var data []byte
-
-	rawMessage := msg.RawMessage
-	if rawMessage == nil {
-		rawMessage, err = c.translateMessage(msg)
-		if err != nil {
-			// Check if this is a "message dropped" error (not a real error)
-			if errors.Is(err, ErrMessageDropped) {
-				return nil // Treat as successful no-op
-			}
-			return err // Real translation error
-		}
-	}
-
-	if err == nil {
-		data, err = json.Marshal(rawMessage)
-	}
-
-	if err == nil {
-		// Create write context with timeout
-		writeCtx, cancel := context.WithTimeout(msg.Ctx, c.config.writeTimeout)
-		defer cancel()
-
-		// Send over WebSocket with write deadline
-		return c.conn.Write(writeCtx, websocket.MessageText, data)
-	} else {
-		return err
-	}
-}
-
 // cleanup handles connection cleanup when the connection is closing.
 // Uses sync.Once to ensure cleanup only happens once, even if called multiple times.
 func (c *Connection) cleanup() {
@@ -267,10 +236,12 @@ func (c *Connection) cleanup() {
 		}
 
 		// Close WebSocket connection gracefully (if not already closed)
-		err = c.conn.Close(websocket.StatusNormalClosure, "Connection closed")
-		if err != nil {
-			// This is expected if the connection was already closed (e.g., by shutdownClose)
-			c.logger.Debug("WebSocket close error (may be expected)", zap.Error(err))
+		if c.conn != nil {
+			err = c.conn.Close(websocket.StatusNormalClosure, "Connection closed")
+			if err != nil {
+				// This is expected if the connection was already closed (e.g., by shutdownClose)
+				c.logger.Debug("WebSocket close error (may be expected)", zap.Error(err))
+			}
 		}
 
 		c.logger.Debug("WebSocket connection cleanup completed")
@@ -311,7 +282,7 @@ func (c *Connection) PassThrough(msg vinculum.EventBusMessage) error {
 	case vinculum.MessageTypeTick:
 		return c.handleTick(msg.Ctx)
 	default:
-		return c.sendRawMessage(msg)
+		return c.sendPacket(msg.Ctx, msg.Payload)
 	}
 }
 
@@ -337,43 +308,27 @@ func (c *Connection) handleTick(ctx context.Context) error {
 	return nil
 }
 
-// sendRawMessage sends a message directly over the WebSocket connection.
-// The message payload should be a structure that can be JSON marshaled (e.g., WireMessage).
-// This bypasses the event transformation pipeline and is used for responses and control messages.
-func (c *Connection) sendRawMessage(msg vinculum.EventBusMessage) error {
-	if msg.Payload == nil {
-		c.logger.Warn("Attempted to send WebSocket message with nil payload")
-		return nil // Treat as no-op
-	}
-
-	// Marshal the payload directly to JSON
-	data, err := json.Marshal(msg.Payload)
+func (c *Connection) sendPacket(ctx context.Context, msg any) error {
+	data, err := json.Marshal(msg)
 	if err != nil {
 		c.logger.Error("Failed to marshal WebSocket message payload",
 			zap.Error(err),
-			zap.Any("payload", msg.Payload),
+			zap.Any("payload", msg),
 		)
 		return err
 	}
 
 	// Create write context with timeout
-	writeCtx, cancel := context.WithTimeout(msg.Ctx, c.config.writeTimeout)
+	writeCtx, cancel := context.WithTimeout(ctx, c.config.writeTimeout)
 	defer cancel()
 
 	// Send over WebSocket with write deadline
 	err = c.conn.Write(writeCtx, websocket.MessageText, data)
 	if err != nil {
-		c.logger.Error("Failed to send WebSocket message",
-			zap.Error(err),
-			zap.String("topic", msg.Topic),
-		)
+		c.logger.Error("Failed to send WebSocket message", zap.Error(err))
 		return err
 	}
 
-	c.logger.Debug("WebSocket message sent successfully",
-		zap.String("topic", msg.Topic),
-		zap.Any("payload", msg.Payload),
-	)
 	return nil
 }
 
@@ -388,84 +343,10 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 		zap.Any("fields", fields),
 	)
 
-	// Create event message for WebSocket client
-	msg := WebSocketMessage{
-		Ctx:     ctx,
-		Topic:   topic,
-		Message: message,
-		Fields:  fields,
-	}
+	c.eventMsg["t"] = topic
+	c.eventMsg["d"] = message
 
-	// Send message directly (we're already in the async subscriber's goroutine)
-	err := c.sendMessage(msg)
-	if err != nil {
-		c.logger.Error("Failed to send WebSocket event message",
-			zap.Error(err),
-			zap.String("topic", topic),
-		)
-		return err
-	}
-
-	return nil
-}
-
-// applyMessageTransforms applies the configured message transformation pipeline
-// to an outbound WebSocket message. Transform functions are called in order
-// until one returns false for continue or the message becomes nil.
-func (c *Connection) applyMessageTransforms(msg *WebSocketMessage) *WebSocketMessage {
-	if len(c.config.messageTransforms) == 0 {
-		return msg // No transforms configured
-	}
-
-	current := msg
-	for i, transform := range c.config.messageTransforms {
-		if current == nil {
-			// Previous transform dropped the message, stop processing
-			c.logger.Debug("Message transform pipeline stopped due to nil message",
-				zap.Int("transform_index", i),
-			)
-			break
-		}
-
-		transformed, continueProcessing := transform(current)
-		current = transformed
-
-		if current == nil {
-			// Transform dropped the message
-			c.logger.Debug("Message dropped by transform function",
-				zap.Int("transform_index", i),
-			)
-			break
-		}
-
-		if !continueProcessing {
-			// Transform requested to stop processing
-			c.logger.Debug("Message transform pipeline stopped by transform function",
-				zap.Int("transform_index", i),
-			)
-			break
-		}
-	}
-
-	return current
-}
-
-func (c *Connection) translateMessage(msg WebSocketMessage) (any, error) {
-	// Apply message transformation pipeline
-	transformedMsg := c.applyMessageTransforms(&msg)
-	if transformedMsg == nil {
-		// Message was dropped by transform pipeline
-		c.logger.Debug("Message dropped by transform pipeline",
-			zap.String("topic", msg.Topic),
-		)
-		return nil, ErrMessageDropped
-	}
-
-	// Use the transformed message for translation
-	c.eventMsg["t"] = transformedMsg.Topic
-	c.eventMsg["d"] = transformedMsg.Message
-
-	return c.eventMsg, nil
+	return c.sendPacket(ctx, c.eventMsg)
 }
 
 func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, err error) {

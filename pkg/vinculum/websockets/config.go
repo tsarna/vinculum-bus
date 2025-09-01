@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/transform"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +22,7 @@ type ListenerConfig struct {
 	eventAuth              EventAuthFunc
 	subscriptionController SubscriptionControllerFactory
 	initialSubscriptions   []string
-	messageTransforms      []MessageTransformFunc
+	messageTransforms      []transform.MessageTransformFunc
 }
 
 const (
@@ -195,31 +196,25 @@ func (c *ListenerConfig) WithInitialSubscriptions(topics ...string) *ListenerCon
 
 // WithMessageTransforms sets the message transformation functions that will be
 // applied to outbound messages from the EventBus before sending to WebSocket clients.
-// Transform functions are called in the order they are provided.
+// These transforms use the new transform.MessageTransformFunc type and operate on
+// EventBusMessage rather than WebSocketMessage.
 //
-// Each function receives a *WebSocketMessage and returns:
-//   - *WebSocketMessage: The transformed message (nil to drop the message)
-//   - bool: Whether to continue calling subsequent transforms (ignored if message is nil)
-//
-// Use cases:
-//   - Message filtering based on content or topic
-//   - Adding metadata or enriching messages
-//   - Format conversion or data transformation
-//   - Rate limiting or throttling
-//   - Message routing or duplication
+// Transform functions are called in the order they are provided and work with the
+// subscriber wrapper pattern for better separation of concerns.
 //
 // Example:
 //
-//	config.WithMessageTransforms(
-//	    filterSensitiveData,
-//	    addTimestamp,
-//	    enrichWithMetadata,
-//	)
+//	transforms := []transform.MessageTransformFunc{
+//	    transform.DropByTopicPattern("internal/*"),
+//	    transform.AddTimestamp(),
+//	    transform.FilterByTopicPrefix("public/"),
+//	}
+//	config.WithMessageTransforms(transforms...)
 //
 // Default: No transforms (messages sent as-is)
-func (c *ListenerConfig) WithMessageTransforms(transforms ...MessageTransformFunc) *ListenerConfig {
+func (c *ListenerConfig) WithMessageTransforms(transforms ...transform.MessageTransformFunc) *ListenerConfig {
 	if len(transforms) > 0 {
-		c.messageTransforms = make([]MessageTransformFunc, len(transforms))
+		c.messageTransforms = make([]transform.MessageTransformFunc, len(transforms))
 		copy(c.messageTransforms, transforms)
 	}
 	return c

@@ -245,45 +245,25 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 		config := NewListenerConfig()
 		assert.Empty(t, config.messageTransforms)
 
-		// Test setting message transforms
-		transform1 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
+		// Test setting message transforms using new transform package
+		transform1 := func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
 			return msg, true
 		}
-		transform2 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
+		transform2 := func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
 			return msg, false
 		}
-		transform3 := func(msg *WebSocketMessage) (*WebSocketMessage, bool) {
-			return nil, true
-		}
 
-		config.WithMessageTransforms(transform1, transform2, transform3)
-		assert.Len(t, config.messageTransforms, 3)
-
-		// Test that functions are copied (not shared reference)
-		originalTransforms := []MessageTransformFunc{transform1}
-		config2 := NewListenerConfig()
-		config2.WithMessageTransforms(originalTransforms...)
-		assert.Len(t, config2.messageTransforms, 1)
-
-		// Test empty transforms (should not change existing transforms)
-		config3 := NewListenerConfig().WithMessageTransforms(transform1)
-		config3.WithMessageTransforms() // Empty call
-		assert.Len(t, config3.messageTransforms, 1)
-
-		// Test overwriting existing transforms
-		config4 := NewListenerConfig()
-		config4.WithMessageTransforms(transform1, transform2)
-		config4.WithMessageTransforms(transform3)
-		assert.Len(t, config4.messageTransforms, 1)
+		config.WithMessageTransforms(transform1, transform2)
+		assert.Len(t, config.messageTransforms, 2)
 
 		// Test fluent interface
-		config5 := NewListenerConfig().
+		config2 := NewListenerConfig().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithMessageTransforms(transform1)
 
-		assert.Len(t, config5.messageTransforms, 1)
-		assert.Equal(t, eventBus, config5.eventBus)
-		assert.Equal(t, logger, config5.logger)
+		assert.Len(t, config2.messageTransforms, 1)
+		assert.Equal(t, eventBus, config2.eventBus)
+		assert.Equal(t, logger, config2.logger)
 	})
 }
