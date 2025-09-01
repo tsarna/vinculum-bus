@@ -1,4 +1,4 @@
-package websockets
+package server
 
 import (
 	"context"
@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 )
 
 func TestEventAuthFunctions(t *testing.T) {
 	ctx := context.Background()
-	testMsg := &WireMessage{Topic: "test/topic", Data: "test message"}
+	testMsg := &websockets.WireMessage{Topic: "test/topic", Data: "test message"}
 
 	t.Run("AllowAllEvents", func(t *testing.T) {
 		modifiedMsg, err := AllowAllEvents(ctx, testMsg)
@@ -35,13 +36,13 @@ func TestEventAuthFunctions(t *testing.T) {
 		authFunc := AllowTopicPrefix("client/")
 
 		// Should allow topics with prefix
-		clientMsg := &WireMessage{Topic: "client/events", Data: "test message"}
+		clientMsg := &websockets.WireMessage{Topic: "client/events", Data: "test message"}
 		modifiedMsg, err := authFunc(ctx, clientMsg)
 		assert.NoError(t, err)
 		assert.Equal(t, clientMsg, modifiedMsg) // Returns original message unchanged
 
 		// Should deny topics without prefix
-		serverMsg := &WireMessage{Topic: "server/events", Data: "test message"}
+		serverMsg := &websockets.WireMessage{Topic: "server/events", Data: "test message"}
 		modifiedMsg, err = authFunc(ctx, serverMsg)
 		assert.Error(t, err)
 		assert.Nil(t, modifiedMsg)
@@ -49,19 +50,19 @@ func TestEventAuthFunctions(t *testing.T) {
 
 		// Test edge cases
 		// Exact prefix match
-		exactMsg := &WireMessage{Topic: "client/", Data: "test"}
+		exactMsg := &websockets.WireMessage{Topic: "client/", Data: "test"}
 		modifiedMsg, err = authFunc(ctx, exactMsg)
 		assert.NoError(t, err)
 		assert.Equal(t, exactMsg, modifiedMsg)
 
 		// Prefix is longer than topic
-		shortMsg := &WireMessage{Topic: "cli", Data: "test"}
+		shortMsg := &websockets.WireMessage{Topic: "cli", Data: "test"}
 		modifiedMsg, err = authFunc(ctx, shortMsg)
 		assert.Error(t, err)
 		assert.Nil(t, modifiedMsg)
 
 		// Empty topic
-		emptyMsg := &WireMessage{Topic: "", Data: "test"}
+		emptyMsg := &websockets.WireMessage{Topic: "", Data: "test"}
 		modifiedMsg, err = authFunc(ctx, emptyMsg)
 		assert.Error(t, err)
 		assert.Nil(t, modifiedMsg)
@@ -74,23 +75,23 @@ func TestEventAuthFunctions(t *testing.T) {
 			authFunc := AllowTopicPattern("sensor/+/data")
 
 			// Should allow matching topics
-			tempMsg := &WireMessage{Topic: "sensor/temperature/data", Data: "23.5"}
+			tempMsg := &websockets.WireMessage{Topic: "sensor/temperature/data", Data: "23.5"}
 			modifiedMsg, err := authFunc(ctx, tempMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, tempMsg, modifiedMsg)
 
-			humidityMsg := &WireMessage{Topic: "sensor/humidity/data", Data: "65%"}
+			humidityMsg := &websockets.WireMessage{Topic: "sensor/humidity/data", Data: "65%"}
 			modifiedMsg, err = authFunc(ctx, humidityMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, humidityMsg, modifiedMsg)
 
 			// Should deny non-matching topics
-			wrongMsg := &WireMessage{Topic: "sensor/temperature/reading", Data: "wrong"}
+			wrongMsg := &websockets.WireMessage{Topic: "sensor/temperature/reading", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, wrongMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
 
-			nonSensorMsg := &WireMessage{Topic: "weather/temperature/data", Data: "wrong"}
+			nonSensorMsg := &websockets.WireMessage{Topic: "weather/temperature/data", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, nonSensorMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
@@ -100,18 +101,18 @@ func TestEventAuthFunctions(t *testing.T) {
 			authFunc := AllowTopicPattern("events/+category/#")
 
 			// Should allow various matching topics
-			userMsg := &WireMessage{Topic: "events/user/login", Data: "user event"}
+			userMsg := &websockets.WireMessage{Topic: "events/user/login", Data: "user event"}
 			modifiedMsg, err := authFunc(ctx, userMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, userMsg, modifiedMsg)
 
-			systemMsg := &WireMessage{Topic: "events/system/alerts/critical/memory", Data: "system event"}
+			systemMsg := &websockets.WireMessage{Topic: "events/system/alerts/critical/memory", Data: "system event"}
 			modifiedMsg, err = authFunc(ctx, systemMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, systemMsg, modifiedMsg)
 
 			// Should deny non-matching topics
-			wrongMsg := &WireMessage{Topic: "notifications/user/login", Data: "wrong"}
+			wrongMsg := &websockets.WireMessage{Topic: "notifications/user/login", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, wrongMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
@@ -121,18 +122,18 @@ func TestEventAuthFunctions(t *testing.T) {
 			authFunc := AllowTopicPattern("client/+userId/actions/+action")
 
 			// Should allow matching topics
-			loginMsg := &WireMessage{Topic: "client/john123/actions/login", Data: "login event"}
+			loginMsg := &websockets.WireMessage{Topic: "client/john123/actions/login", Data: "login event"}
 			modifiedMsg, err := authFunc(ctx, loginMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, loginMsg, modifiedMsg)
 
-			logoutMsg := &WireMessage{Topic: "client/jane456/actions/logout", Data: "logout event"}
+			logoutMsg := &websockets.WireMessage{Topic: "client/jane456/actions/logout", Data: "logout event"}
 			modifiedMsg, err = authFunc(ctx, logoutMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, logoutMsg, modifiedMsg)
 
 			// Should deny non-matching topics
-			wrongMsg := &WireMessage{Topic: "client/john123/settings/update", Data: "wrong"}
+			wrongMsg := &websockets.WireMessage{Topic: "client/john123/settings/update", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, wrongMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
@@ -142,18 +143,18 @@ func TestEventAuthFunctions(t *testing.T) {
 			authFunc := AllowTopicPattern("exact/topic/path")
 
 			// Should allow exact match
-			exactMsg := &WireMessage{Topic: "exact/topic/path", Data: "exact"}
+			exactMsg := &websockets.WireMessage{Topic: "exact/topic/path", Data: "exact"}
 			modifiedMsg, err := authFunc(ctx, exactMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, exactMsg, modifiedMsg)
 
 			// Should deny non-exact matches
-			wrongMsg := &WireMessage{Topic: "exact/topic/path/extra", Data: "wrong"}
+			wrongMsg := &websockets.WireMessage{Topic: "exact/topic/path/extra", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, wrongMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
 
-			prefixMsg := &WireMessage{Topic: "exact/topic", Data: "wrong"}
+			prefixMsg := &websockets.WireMessage{Topic: "exact/topic", Data: "wrong"}
 			modifiedMsg, err = authFunc(ctx, prefixMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
@@ -171,7 +172,7 @@ func TestEventAuthFunctions(t *testing.T) {
 			)
 
 			// Should allow when both conditions are met
-			validMsg := &WireMessage{Topic: "client/user123/sensor/temperature", Data: "valid"}
+			validMsg := &websockets.WireMessage{Topic: "client/user123/sensor/temperature", Data: "valid"}
 			modifiedMsg, err := chainedAuth(ctx, validMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, validMsg, modifiedMsg)
@@ -184,7 +185,7 @@ func TestEventAuthFunctions(t *testing.T) {
 			)
 
 			// Should be denied by first function (wrong prefix)
-			invalidMsg := &WireMessage{Topic: "server/user123/sensor/temperature", Data: "invalid"}
+			invalidMsg := &websockets.WireMessage{Topic: "server/user123/sensor/temperature", Data: "invalid"}
 			modifiedMsg, err := chainedAuth(ctx, invalidMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
@@ -198,14 +199,14 @@ func TestEventAuthFunctions(t *testing.T) {
 			)
 
 			// Should pass first function but fail second (wrong pattern)
-			invalidMsg := &WireMessage{Topic: "client/user123/actions/login", Data: "invalid"}
+			invalidMsg := &websockets.WireMessage{Topic: "client/user123/actions/login", Data: "invalid"}
 			modifiedMsg, err := chainedAuth(ctx, invalidMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)
 		})
 
 		t.Run("function silently drops", func(t *testing.T) {
-			dropTestClients := func(ctx context.Context, msg *WireMessage) (*WireMessage, error) {
+			dropTestClients := func(ctx context.Context, msg *websockets.WireMessage) (*websockets.WireMessage, error) {
 				if strings.Contains(msg.Topic, "/test/") {
 					return nil, nil // Silently drop test events
 				}
@@ -218,21 +219,21 @@ func TestEventAuthFunctions(t *testing.T) {
 			)
 
 			// Should be silently dropped by second function
-			testMsg := &WireMessage{Topic: "client/test/sensor/data", Data: "test"}
+			testMsg := &websockets.WireMessage{Topic: "client/test/sensor/data", Data: "test"}
 			modifiedMsg, err := chainedAuth(ctx, testMsg)
 			assert.NoError(t, err)
 			assert.Nil(t, modifiedMsg) // Silently dropped
 
 			// Should pass through for non-test clients
-			prodMsg := &WireMessage{Topic: "client/prod/sensor/data", Data: "prod"}
+			prodMsg := &websockets.WireMessage{Topic: "client/prod/sensor/data", Data: "prod"}
 			modifiedMsg, err = chainedAuth(ctx, prodMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, prodMsg, modifiedMsg)
 		})
 
 		t.Run("function modifies message", func(t *testing.T) {
-			addPrefix := func(ctx context.Context, msg *WireMessage) (*WireMessage, error) {
-				modified := &WireMessage{
+			addPrefix := func(ctx context.Context, msg *websockets.WireMessage) (*websockets.WireMessage, error) {
+				modified := &websockets.WireMessage{
 					Kind:  msg.Kind,
 					Topic: "processed/" + msg.Topic,
 					Data:  msg.Data,
@@ -247,7 +248,7 @@ func TestEventAuthFunctions(t *testing.T) {
 			)
 
 			// Should be modified by second function
-			originalMsg := &WireMessage{Topic: "client/user123/data", Data: "original"}
+			originalMsg := &websockets.WireMessage{Topic: "client/user123/data", Data: "original"}
 			modifiedMsg, err := chainedAuth(ctx, originalMsg)
 			assert.NoError(t, err)
 			assert.NotEqual(t, originalMsg, modifiedMsg)
@@ -259,7 +260,7 @@ func TestEventAuthFunctions(t *testing.T) {
 			chainedAuth := ChainEventAuth()
 
 			// Empty chain should allow everything unchanged
-			msg := &WireMessage{Topic: "any/topic", Data: "any data"}
+			msg := &websockets.WireMessage{Topic: "any/topic", Data: "any data"}
 			modifiedMsg, err := chainedAuth(ctx, msg)
 			assert.NoError(t, err)
 			assert.Equal(t, msg, modifiedMsg)
@@ -269,12 +270,12 @@ func TestEventAuthFunctions(t *testing.T) {
 			chainedAuth := ChainEventAuth(AllowTopicPrefix("allowed/"))
 
 			// Should behave like the single function
-			allowedMsg := &WireMessage{Topic: "allowed/topic", Data: "allowed"}
+			allowedMsg := &websockets.WireMessage{Topic: "allowed/topic", Data: "allowed"}
 			modifiedMsg, err := chainedAuth(ctx, allowedMsg)
 			assert.NoError(t, err)
 			assert.Equal(t, allowedMsg, modifiedMsg)
 
-			deniedMsg := &WireMessage{Topic: "denied/topic", Data: "denied"}
+			deniedMsg := &websockets.WireMessage{Topic: "denied/topic", Data: "denied"}
 			modifiedMsg, err = chainedAuth(ctx, deniedMsg)
 			assert.Error(t, err)
 			assert.Nil(t, modifiedMsg)

@@ -1,4 +1,4 @@
-package websockets
+package server
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 	"go.uber.org/zap"
 )
 
@@ -174,7 +175,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	t.Run("event authorization configuration", func(t *testing.T) {
 		// Default should be DenyAllEvents
 		config := NewListenerConfig()
-		testMsg := &WireMessage{Topic: "test/topic", Data: "test message"}
+		testMsg := &websockets.WireMessage{Topic: "test/topic", Data: "test message"}
 		modifiedMsg, err := config.eventAuth(context.Background(), testMsg)
 		assert.Error(t, err)
 		assert.Nil(t, modifiedMsg)

@@ -1,4 +1,4 @@
-package websockets
+package server
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func newListener(config *ListenerConfig) *Listener {
 //
 // Usage example:
 //
-//	listener := websockets.NewListener(eventBus, logger)
+//	listener := NewListener(eventBus, logger)
 //	http.HandleFunc("/ws", listener.ServeWebsocket)
 func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
 	// Accept the WebSocket connection

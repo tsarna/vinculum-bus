@@ -1,4 +1,4 @@
-package websockets
+package server
 
 import (
 	"context"
@@ -9,17 +9,9 @@ import (
 	"github.com/coder/websocket"
 	"github.com/tsarna/vinculum/pkg/vinculum"
 	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
+	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 	"go.uber.org/zap"
 )
-
-// WebSocketMessage represents a message to be sent over the WebSocket connection.
-type WebSocketMessage struct {
-	Ctx        context.Context
-	Topic      string
-	RawMessage any
-	Message    any
-	Fields     map[string]string
-}
 
 // Connection represents an individual WebSocket connection that integrates with the EventBus.
 // It implements the Subscriber interface to receive events from the EventBus and forwards
@@ -166,7 +158,7 @@ func (c *Connection) messageReader() {
 		}
 
 		// Parse JSON message
-		var request WireMessage
+		var request websockets.WireMessage
 		if err := json.Unmarshal(data, &request); err != nil {
 			c.logger.Warn("Failed to parse incoming WebSocket message",
 				zap.Error(err),
@@ -190,8 +182,8 @@ func (c *Connection) messageReader() {
 
 // sendErrorResponse sends a NACK response for malformed requests
 func (c *Connection) sendErrorResponse(id any, errorMsg string) {
-	response := WireMessage{
-		Kind:  MessageKindNack,
+	response := websockets.WireMessage{
+		Kind:  websockets.MessageKindNack,
 		Id:    id,
 		Error: errorMsg,
 	}
@@ -200,8 +192,8 @@ func (c *Connection) sendErrorResponse(id any, errorMsg string) {
 	responseMsg := vinculum.EventBusMessage{
 		Ctx:     c.ctx,
 		MsgType: vinculum.MessageTypePassThrough,
-		Topic:   "",       // Error responses don't have topics
-		Payload: response, // WireMessage will be JSON marshaled directly
+		Topic:   "", // Error responses don't have topics
+		Payload: response,
 	}
 
 	// Send error response through PassThrough method
@@ -349,13 +341,13 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 	return c.sendPacket(ctx, c.eventMsg)
 }
 
-func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, err error) {
-	response := WireMessage{
-		Kind: MessageKindAck,
+func (c *Connection) respondToRequest(ctx context.Context, request websockets.WireMessage, err error) {
+	response := websockets.WireMessage{
+		Kind: websockets.MessageKindAck,
 		Id:   request.Id,
 	}
 	if err != nil {
-		response.Kind = MessageKindNack
+		response.Kind = websockets.MessageKindNack
 		response.Error = err.Error()
 	}
 
@@ -364,7 +356,7 @@ func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, 
 		Ctx:     ctx,
 		MsgType: vinculum.MessageTypePassThrough,
 		Topic:   "",       // Responses don't have topics
-		Payload: response, // WireMessage will be JSON marshaled directly
+		Payload: response, // websockets.WireMessage will be JSON marshaled directly
 	}
 
 	// Send response through PassThrough method
@@ -378,11 +370,11 @@ func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, 
 	}
 }
 
-func handleRequest(c *Connection, ctx context.Context, request WireMessage) {
+func handleRequest(c *Connection, ctx context.Context, request websockets.WireMessage) {
 	var err error
 
 	switch request.Kind {
-	case MessageKindEvent:
+	case websockets.MessageKindEvent:
 		if request.Topic == "" {
 			err = fmt.Errorf("topic is required")
 		} else if request.Data == nil {
@@ -409,16 +401,16 @@ func handleRequest(c *Connection, ctx context.Context, request WireMessage) {
 		if request.Id == nil {
 			return
 		}
-	case MessageKindAck:
+	case websockets.MessageKindAck:
 		err = nil
-	case MessageKindSubscribe:
+	case websockets.MessageKindSubscribe:
 		// Use subscription controller to validate/modify the subscription
 		err = c.subscriptionController.Subscribe(ctx, c, request.Topic)
 		if err == nil {
 			// Controller approved, perform the actual subscription
 			err = c.eventBus.Subscribe(ctx, c, request.Topic)
 		}
-	case MessageKindUnsubscribe:
+	case websockets.MessageKindUnsubscribe:
 		// Use subscription controller to validate/modify the unsubscription
 		err = c.subscriptionController.Unsubscribe(ctx, c, request.Topic)
 		if err == nil {
