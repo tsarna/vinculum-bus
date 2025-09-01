@@ -39,6 +39,7 @@ const (
 	MessageTypeOnSubscribe
 	MessageTypeOnUnsubscribe
 	MessageTypePassThrough
+	MessageTypeTick
 )
 
 // EventBusMessage represents a message in the event bus with its context and metadata

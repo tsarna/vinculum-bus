@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/tsarna/vinculum/pkg/vinculum"
 )
@@ -28,6 +29,7 @@ type AsyncQueueingSubscriber struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+	ticker    *time.Ticker // Optional ticker for periodic operations
 }
 
 // NewAsyncQueueingSubscriber creates a new AsyncQueueingSubscriber that processes
@@ -63,6 +65,26 @@ func NewAsyncQueueingSubscriber(wrapped vinculum.Subscriber, queueSize int) *Asy
 	return subscriber
 }
 
+// WithTicker enables periodic tick messages at the specified interval.
+// Returns the same AsyncQueueingSubscriber instance for method chaining.
+//
+// When enabled, the subscriber will periodically send MessageTypeTick messages
+// to the wrapped subscriber's PassThrough method. This is useful for implementing
+// periodic operations like connection health checks, cleanup tasks, etc.
+//
+// Example:
+//
+//	asyncSub := subutils.NewAsyncQueueingSubscriber(baseSubscriber, 100).
+//		WithTicker(30 * time.Second) // Send tick every 30 seconds
+//
+// Note: The ticker is automatically cleaned up when Close() is called.
+func (a *AsyncQueueingSubscriber) WithTicker(interval time.Duration) *AsyncQueueingSubscriber {
+	if interval > 0 && a.ticker == nil {
+		a.ticker = time.NewTicker(interval)
+	}
+	return a
+}
+
 // processMessage handles a single message by dispatching it to the appropriate wrapped subscriber method
 func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
 	switch msg.MsgType {
@@ -81,10 +103,23 @@ func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
 func (a *AsyncQueueingSubscriber) processQueue() {
 	defer a.wg.Done()
 
+	// Set up ticker channel if ticker is configured
+	var tickerChan <-chan time.Time
+	if a.ticker != nil {
+		tickerChan = a.ticker.C
+	}
+
 	for {
 		select {
 		case msg := <-a.queue:
 			a.processMessage(msg)
+		case <-tickerChan:
+			a.wrapped.PassThrough(vinculum.EventBusMessage{
+				Ctx:     context.Background(), // TODO can we use the connection's context here somehow?
+				MsgType: vinculum.MessageTypeTick,
+				Topic:   "",
+				Payload: nil,
+			})
 		case <-a.done:
 			// Shutdown signal received, drain remaining messages
 			a.drainQueue()
@@ -200,10 +235,25 @@ func (a *AsyncQueueingSubscriber) PassThrough(msg vinculum.EventBusMessage) erro
 // Close gracefully shuts down the async subscriber, ensuring all queued messages
 // are processed before returning. This method should be called to properly clean up
 // the background goroutine.
+//
+// The shutdown process:
+// 1. Stop the ticker (if running) to prevent new tick events
+// 2. Signal the message processor goroutine to stop via the done channel
+// 3. Wait for the message processor goroutine to complete
+// 4. Any remaining messages in the queue are processed during drainQueue()
 func (a *AsyncQueueingSubscriber) Close() error {
 	a.closeOnce.Do(func() {
+		// Stop ticker first to prevent new tick events during shutdown
+		if a.ticker != nil {
+			a.ticker.Stop()
+		}
+
+		// Signal shutdown to the message processor goroutine
 		close(a.done)
-		a.wg.Wait() // Wait for the background goroutine to finish processing
+
+		// Wait for the message processor goroutine to finish
+		a.wg.Wait()
+
 		// Don't close the queue channel here as the background goroutine might still be reading from it
 	})
 	return nil

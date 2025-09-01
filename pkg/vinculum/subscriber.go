@@ -7,6 +7,8 @@ import (
 	"github.com/amir-yaghoubi/mqttpattern"
 )
 
+// Note: Unless a subscriber is suubscribed to multiple busses and/or async queueing wrappers, it will
+// only be called from one thread, so it doesn't need to worry about concurrent calls.
 type Subscriber interface {
 	OnSubscribe(ctx context.Context, topic string) error
 	OnUnsubscribe(ctx context.Context, topic string) error

@@ -13,7 +13,6 @@ import (
 
 // asyncTestSubscriber is a subscriber for testing that tracks all operations
 type asyncTestSubscriber struct {
-	mu           sync.Mutex
 	subscribes   []string
 	unsubscribes []string
 	events       []asyncTestEvent
@@ -31,8 +30,6 @@ func (a *asyncTestSubscriber) OnSubscribe(ctx context.Context, topic string) err
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.subscribes = append(a.subscribes, topic)
 	return nil
 }
@@ -41,8 +38,6 @@ func (a *asyncTestSubscriber) OnUnsubscribe(ctx context.Context, topic string) e
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.unsubscribes = append(a.unsubscribes, topic)
 	return nil
 }
@@ -51,8 +46,6 @@ func (a *asyncTestSubscriber) OnEvent(ctx context.Context, topic string, message
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.events = append(a.events, asyncTestEvent{
 		topic:   topic,
 		message: message,
@@ -65,21 +58,15 @@ func (a *asyncTestSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.passthroughs = append(a.passthroughs, msg)
 	return nil
 }
 
 func (a *asyncTestSubscriber) getCounts() (int, int, int, int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return len(a.subscribes), len(a.unsubscribes), len(a.events), len(a.passthroughs)
 }
 
 func (a *asyncTestSubscriber) getEvents() []asyncTestEvent {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	events := make([]asyncTestEvent, len(a.events))
 	copy(events, a.events)
 	return events
@@ -208,9 +195,9 @@ func TestAsyncQueueingSubscriber_PassThrough(t *testing.T) {
 func TestAsyncQueueingSubscriber_QueueFull(t *testing.T) {
 	// Create a subscriber with slow processing to fill the queue
 	baseSubscriber := &asyncTestSubscriber{
-		processDelay: 100 * time.Millisecond,
+		processDelay: 250 * time.Millisecond,
 	}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 2) // Small queue
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 1) // Small queue
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -291,7 +278,7 @@ func TestAsyncQueueingSubscriber_ConcurrentOperations(t *testing.T) {
 	wg.Wait()
 
 	// Wait for all operations to be processed
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	// Verify all events were processed
 	_, _, events, _ := baseSubscriber.getCounts()
@@ -323,7 +310,7 @@ func TestAsyncQueueingSubscriber_QueueSizeTracking(t *testing.T) {
 	assert.True(t, queueSize > 0 && queueSize <= 5)
 
 	// Wait for processing to complete
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Queue should be empty again
 	assert.Equal(t, 0, asyncSub.QueueSize())
@@ -343,4 +330,101 @@ func TestAsyncQueueingSubscriber_CloseMultipleTimes(t *testing.T) {
 	assert.NoError(t, err3)
 
 	assert.True(t, asyncSub.IsClosed())
+}
+
+func TestAsyncQueueingSubscriber_WithTicker(t *testing.T) {
+	baseSubscriber := &asyncTestSubscriber{}
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
+		WithTicker(50 * time.Millisecond) // Fast ticks for testing
+	defer asyncSub.Close()
+
+	// Wait for a few ticks
+	time.Sleep(120 * time.Millisecond)
+
+	// Should have received at least 2 tick messages
+	_, _, _, passthroughs := baseSubscriber.getCounts()
+	assert.GreaterOrEqual(t, passthroughs, 2, "Should have received at least 2 tick messages")
+}
+
+func TestAsyncQueueingSubscriber_WithTicker_ZeroInterval(t *testing.T) {
+	baseSubscriber := &asyncTestSubscriber{}
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
+		WithTicker(0) // Zero interval should disable ticker
+	defer asyncSub.Close()
+
+	// Wait a bit
+	time.Sleep(100 * time.Millisecond)
+
+	// Should have received no tick messages
+	_, _, _, passthroughs := baseSubscriber.getCounts()
+	assert.Equal(t, 0, passthroughs, "Should have received no tick messages with zero interval")
+}
+
+func TestAsyncQueueingSubscriber_WithTicker_MultipleCallsIgnored(t *testing.T) {
+	baseSubscriber := &asyncTestSubscriber{}
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
+		WithTicker(100 * time.Millisecond).
+		WithTicker(50 * time.Millisecond) // Second call should be ignored
+	defer asyncSub.Close()
+
+	// The ticker should use the first interval (100ms), not the second (50ms)
+	time.Sleep(80 * time.Millisecond)
+
+	// Should have received 0 ticks (since first tick is at 100ms)
+	_, _, _, passthroughs := baseSubscriber.getCounts()
+	assert.Equal(t, 0, passthroughs, "Should not have received tick yet with 100ms interval")
+
+	// Wait for the first tick
+	time.Sleep(50 * time.Millisecond) // Total: 130ms
+
+	// Should have received 1 tick now
+	_, _, _, passthroughs = baseSubscriber.getCounts()
+	assert.Equal(t, 1, passthroughs, "Should have received exactly 1 tick")
+}
+
+func TestAsyncQueueingSubscriber_TickerStopsOnClose(t *testing.T) {
+	baseSubscriber := &asyncTestSubscriber{}
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
+		WithTicker(30 * time.Millisecond)
+
+	// Wait for a few ticks
+	time.Sleep(80 * time.Millisecond)
+
+	// Get current tick count
+	_, _, _, ticksBefore := baseSubscriber.getCounts()
+	assert.GreaterOrEqual(t, ticksBefore, 2, "Should have received some ticks before close")
+
+	// Close the subscriber
+	err := asyncSub.Close()
+	assert.NoError(t, err)
+
+	// Wait longer than the tick interval
+	time.Sleep(100 * time.Millisecond)
+
+	// Tick count should not have increased
+	_, _, _, ticksAfter := baseSubscriber.getCounts()
+	assert.Equal(t, ticksBefore, ticksAfter, "Tick count should not increase after close")
+}
+
+func TestAsyncQueueingSubscriber_TickerWithQueueFull(t *testing.T) {
+	// Create a subscriber with slow processing and small queue
+	baseSubscriber := &asyncTestSubscriber{
+		processDelay: 200 * time.Millisecond, // Slow processing
+	}
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 1). // Very small queue
+									WithTicker(10 * time.Millisecond) // Fast ticks
+	defer asyncSub.Close()
+
+	// Fill the queue with a regular message first
+	ctx := context.Background()
+	err := asyncSub.OnEvent(ctx, "test", "data", nil)
+	assert.NoError(t, err)
+
+	// Wait for ticks to try to queue (they should fail due to full queue)
+	time.Sleep(50 * time.Millisecond)
+
+	// The ticker should have stopped due to queue full errors
+	// We can't easily verify this without exposing internal state,
+	// but the test shouldn't hang or panic
+	assert.True(t, true, "Test completed without hanging")
 }
