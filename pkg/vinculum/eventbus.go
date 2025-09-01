@@ -12,6 +12,8 @@ import (
 )
 
 type EventBus interface {
+	Subscriber // An EventBus can be subscribed to other event busses
+
 	Start() error
 	Stop() error
 
@@ -23,21 +25,28 @@ type EventBus interface {
 	PublishSync(ctx context.Context, topic string, payload any) error
 }
 
-type messageType int
+// MessageType represents the type of message in the event bus
+type MessageType int
 
 const (
-	messageTypeEvent messageType = iota
-	messageTypeSubscribe
-	messageTypeSubscribeWithExtraction
-	messageTypeUnsubscribe
-	messageTypeEventSync
+	MessageTypeEvent MessageType = iota
+	MessageTypeSubscribe
+	MessageTypeSubscribeWithExtraction
+	MessageTypeUnsubscribe
+	MessageTypeUnsubscribeAll
+	MessageTypeEventSync
+
+	MessageTypeOnSubscribe
+	MessageTypeOnUnsubscribe
+	MessageTypePassThrough
 )
 
-type eventBusMessage struct {
-	ctx     context.Context
-	msgType messageType
-	topic   string
-	payload any
+// EventBusMessage represents a message in the event bus with its context and metadata
+type EventBusMessage struct {
+	Ctx     context.Context
+	MsgType MessageType
+	Topic   string
+	Payload any
 }
 
 // subscriptionRequest holds subscriber and response channel for subscribe/unsubscribe operations
@@ -56,7 +65,7 @@ type syncPublishRequest struct {
 // Uses atomic operations for the started flag and relies on Go's
 // inherently thread-safe channels for message passing.
 type basicEventBus struct {
-	ch            chan eventBusMessage
+	ch            chan EventBusMessage
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -72,6 +81,7 @@ type basicEventBus struct {
 	publishCounter     Counter
 	publishSyncCounter Counter
 	subscribeCounter   Counter
+	unsubscribeCounter Counter
 	errorCounter       Counter
 	latencyHistogram   Histogram
 	subscriberGauge    Gauge
@@ -91,7 +101,7 @@ func NewEventBusWithObservability(logger *zap.Logger, obs *ObservabilityConfig) 
 	bufferSize := getObservabilityBufferSize(obs)
 	ctx, cancel := context.WithCancel(context.Background())
 	eb := &basicEventBus{
-		ch:            make(chan eventBusMessage, bufferSize), // Configurable buffered channel
+		ch:            make(chan EventBusMessage, bufferSize), // Configurable buffered channel
 		ctx:           ctx,
 		cancel:        cancel,
 		subscriptions: make(map[Subscriber]map[string]matcher),
@@ -114,6 +124,7 @@ func (b *basicEventBus) setupObservability(config *ObservabilityConfig) {
 		b.publishCounter = b.metricsProvider.Counter("eventbus_messages_published_total")
 		b.publishSyncCounter = b.metricsProvider.Counter("eventbus_messages_published_sync_total")
 		b.subscribeCounter = b.metricsProvider.Counter("eventbus_subscriptions_total")
+		b.unsubscribeCounter = b.metricsProvider.Counter("eventbus_unsubscriptions_total")
 		b.errorCounter = b.metricsProvider.Counter("eventbus_errors_total")
 		b.latencyHistogram = b.metricsProvider.Histogram("eventbus_publish_duration_seconds")
 		b.subscriberGauge = b.metricsProvider.Gauge("eventbus_active_subscribers")
@@ -136,21 +147,21 @@ func (b *basicEventBus) Start() error {
 		for {
 			select {
 			case msg := <-b.ch: // Thread-safe channel operation
-				switch msg.msgType {
-				case messageTypeEvent:
+				switch msg.MsgType {
+				case MessageTypeEvent:
 					// Extract context from message (guaranteed non-nil by public API)
-					ctx := msg.ctx
+					ctx := msg.Ctx
 
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
-							if ok, fields := matcher(msg.topic); ok {
-								err := subscriber.OnEvent(ctx, msg.topic, msg.payload, fields)
+							if ok, fields := matcher(msg.Topic); ok {
+								err := subscriber.OnEvent(ctx, msg.Topic, msg.Payload, fields)
 								if err != nil {
 									b.logger.Error("Error in OnEvent", zap.Error(err))
 									if b.errorCounter != nil {
 										b.errorCounter.Add(ctx, 1,
 											Label{Key: "operation", Value: "on_event"},
-											Label{Key: "topic", Value: msg.topic},
+											Label{Key: "topic", Value: msg.Topic},
 										)
 									}
 								}
@@ -159,54 +170,49 @@ func (b *basicEventBus) Start() error {
 						}
 					}
 
-				case messageTypeEventSync:
+				case MessageTypeEventSync:
 					if err := b.doPublishSync(msg); err != nil {
 						b.logger.Error("Error in doPublishSync", zap.Error(err))
 						if b.errorCounter != nil {
-							// Use context from message if available
-							ctx := msg.ctx
-							if ctx == nil {
-								ctx = context.Background()
-							}
-							b.errorCounter.Add(ctx, 1,
+							b.errorCounter.Add(msg.Ctx, 1,
 								Label{Key: "operation", Value: "publish_sync"},
-								Label{Key: "topic", Value: msg.topic},
+								Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
 
-				case messageTypeSubscribe, messageTypeSubscribeWithExtraction:
+				case MessageTypeSubscribe, MessageTypeSubscribeWithExtraction:
 					if err := b.doSubscribe(msg); err != nil {
 						b.logger.Error("Error in doSubscribe", zap.Error(err))
 						if b.errorCounter != nil {
-							// Use context from message if available
-							ctx := msg.ctx
-							if ctx == nil {
-								ctx = context.Background()
-							}
-							b.errorCounter.Add(ctx, 1,
+							b.errorCounter.Add(msg.Ctx, 1,
 								Label{Key: "operation", Value: "subscribe"},
-								Label{Key: "topic", Value: msg.topic},
+								Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
-				case messageTypeUnsubscribe:
+				case MessageTypeUnsubscribe:
 					if err := b.doUnsubscribe(msg); err != nil {
 						b.logger.Error("Error in doUnsubscribe", zap.Error(err))
 						if b.errorCounter != nil {
-							// Use context from message if available
-							ctx := msg.ctx
-							if ctx == nil {
-								ctx = context.Background()
-							}
-							b.errorCounter.Add(ctx, 1,
+							b.errorCounter.Add(msg.Ctx, 1,
 								Label{Key: "operation", Value: "unsubscribe"},
-								Label{Key: "topic", Value: msg.topic},
+								Label{Key: "topic", Value: msg.Topic},
+							)
+						}
+					}
+				case MessageTypeUnsubscribeAll:
+					if err := b.doUnsubscribeAll(msg); err != nil {
+						b.logger.Error("Error in doUnsubscribeAll", zap.Error(err))
+						if b.errorCounter != nil {
+							b.errorCounter.Add(msg.Ctx, 1,
+								Label{Key: "operation", Value: "unsubscribe_all"},
+								Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
 				default:
-					b.logger.Debug("EventBus received unknown message type", zap.Int("msgType", int(msg.msgType)))
+					b.logger.Debug("EventBus received unknown message type", zap.Int("msgType", int(msg.MsgType)))
 				}
 			case <-b.ctx.Done():
 				b.logger.Info("EventBus stopping")
@@ -241,11 +247,11 @@ func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) 
 		b.publishCounter.Add(ctx, 1, Label{Key: "topic", Value: topic})
 	}
 
-	b.accept(eventBusMessage{
-		msgType: messageTypeEvent,
-		topic:   topic,
-		payload: payload,
-		ctx:     ctx,
+	b.accept(EventBusMessage{
+		MsgType: MessageTypeEvent,
+		Topic:   topic,
+		Payload: payload,
+		Ctx:     ctx,
 	})
 	return nil
 }
@@ -270,14 +276,14 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 	}
 
 	responseCh := make(chan error, 1)
-	b.acceptWithResponse(eventBusMessage{
-		msgType: messageTypeEventSync,
-		topic:   topic,
-		payload: syncPublishRequest{
+	b.acceptWithResponse(EventBusMessage{
+		MsgType: MessageTypeEventSync,
+		Topic:   topic,
+		Payload: syncPublishRequest{
 			payload:    payload,
 			responseCh: responseCh,
 		},
-		ctx: ctx,
+		Ctx: ctx,
 	}, responseCh)
 
 	err := <-responseCh
@@ -329,20 +335,20 @@ func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, to
 		)
 	}
 
-	msgType := messageTypeSubscribe
+	msgType := MessageTypeSubscribe
 	if mqttpattern.HasExtractions(topic) {
-		msgType = messageTypeSubscribeWithExtraction
+		msgType = MessageTypeSubscribeWithExtraction
 	}
 
 	responseCh := make(chan error, 1)
-	b.acceptWithResponse(eventBusMessage{
-		msgType: msgType,
-		topic:   topic,
-		payload: subscriptionRequest{
+	b.acceptWithResponse(EventBusMessage{
+		MsgType: msgType,
+		Topic:   topic,
+		Payload: subscriptionRequest{
 			subscriber: subscriber,
 			responseCh: responseCh,
 		},
-		ctx: ctx,
+		Ctx: ctx,
 	}, responseCh)
 
 	err := <-responseCh
@@ -376,26 +382,115 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, subscriber Subscriber, 
 		ctx = context.Background()
 	}
 
+	// Start tracing span if available
+	var span Span
+	if b.tracingProvider != nil {
+		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe")
+		defer span.End()
+
+		span.SetAttributes(
+			Label{Key: "topic", Value: topic},
+			Label{Key: "operation", Value: "unsubscribe"},
+		)
+	}
+
 	responseCh := make(chan error, 1)
-	b.acceptWithResponse(eventBusMessage{
-		msgType: messageTypeUnsubscribe,
-		topic:   topic,
-		payload: subscriptionRequest{
+	b.acceptWithResponse(EventBusMessage{
+		MsgType: MessageTypeUnsubscribe,
+		Topic:   topic,
+		Payload: subscriptionRequest{
 			subscriber: subscriber,
 			responseCh: responseCh,
 		},
-		ctx: ctx,
+		Ctx: ctx,
 	}, responseCh)
 
-	return <-responseCh
+	err := <-responseCh
+
+	// Record metrics and span status
+	if b.unsubscribeCounter != nil {
+		labels := []Label{
+			{Key: "topic", Value: topic},
+		}
+		if err != nil {
+			labels = append(labels, Label{Key: "status", Value: "error"})
+		} else {
+			labels = append(labels, Label{Key: "status", Value: "success"})
+		}
+		b.unsubscribeCounter.Add(ctx, 1, labels...)
+	}
+
+	if span != nil {
+		if err != nil {
+			span.SetStatus(SpanStatusError, err.Error())
+		} else {
+			span.SetStatus(SpanStatusOK, "")
+		}
+	}
+
+	return err
 }
 
-func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
-	req := msg.payload.(subscriptionRequest)
+func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscriber) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Start tracing span if available
+	var span Span
+	if b.tracingProvider != nil {
+		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe_all")
+		defer span.End()
+
+		span.SetAttributes(
+			Label{Key: "operation", Value: "unsubscribe_all"},
+		)
+	}
+
+	responseCh := make(chan error, 1)
+	b.acceptWithResponse(EventBusMessage{
+		MsgType: MessageTypeUnsubscribeAll,
+		Topic:   "*", // Use "*" to indicate all topics
+		Payload: subscriptionRequest{
+			subscriber: subscriber,
+			responseCh: responseCh,
+		},
+		Ctx: ctx,
+	}, responseCh)
+
+	err := <-responseCh
+
+	// Record metrics and span status
+	if b.unsubscribeCounter != nil {
+		labels := []Label{
+			{Key: "topic", Value: "*"}, // Use "*" to indicate all topics
+		}
+		if err != nil {
+			labels = append(labels, Label{Key: "status", Value: "error"})
+		} else {
+			labels = append(labels, Label{Key: "status", Value: "success"})
+		}
+		// For UnsubscribeAll, we increment by 1 operation (not the count of subscriptions)
+		b.unsubscribeCounter.Add(ctx, 1, labels...)
+	}
+
+	if span != nil {
+		if err != nil {
+			span.SetStatus(SpanStatusError, err.Error())
+		} else {
+			span.SetStatus(SpanStatusOK, "")
+		}
+	}
+
+	return err
+}
+
+func (b *basicEventBus) doSubscribe(msg EventBusMessage) error {
+	req := msg.Payload.(subscriptionRequest)
 	subscriber := req.subscriber
 
 	// Extract context from the message (guaranteed non-nil by public API)
-	ctx := msg.ctx
+	ctx := msg.Ctx
 
 	var currentSubscriptions map[string]matcher
 	var ok bool
@@ -405,7 +500,7 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 		b.subscriptions[subscriber] = currentSubscriptions
 	}
 
-	currentSubscriptions[msg.topic] = makeMatcher(msg)
+	currentSubscriptions[msg.Topic] = makeMatcher(msg)
 
 	// Update subscriber gauge
 	if b.subscriberGauge != nil {
@@ -413,17 +508,17 @@ func (b *basicEventBus) doSubscribe(msg eventBusMessage) error {
 		b.subscriberGauge.Set(ctx, subscriberCount)
 	}
 
-	err := subscriber.OnSubscribe(ctx, msg.topic)
+	err := subscriber.OnSubscribe(ctx, msg.Topic)
 	req.responseCh <- err
 	return err
 }
 
-func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
-	req := msg.payload.(subscriptionRequest)
+func (b *basicEventBus) doUnsubscribe(msg EventBusMessage) error {
+	req := msg.Payload.(subscriptionRequest)
 	subscriber := req.subscriber
 
 	// Extract context from the message (guaranteed non-nil by public API)
-	ctx := msg.ctx
+	ctx := msg.Ctx
 
 	currentSubscriptions, ok := b.subscriptions[subscriber]
 	if !ok {
@@ -431,7 +526,7 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 		return nil
 	}
 
-	delete(currentSubscriptions, msg.topic)
+	delete(currentSubscriptions, msg.Topic)
 
 	if len(currentSubscriptions) == 0 {
 		delete(b.subscriptions, subscriber)
@@ -443,16 +538,50 @@ func (b *basicEventBus) doUnsubscribe(msg eventBusMessage) error {
 		b.subscriberGauge.Set(ctx, subscriberCount)
 	}
 
-	err := subscriber.OnUnsubscribe(ctx, msg.topic)
+	err := subscriber.OnUnsubscribe(ctx, msg.Topic)
 	req.responseCh <- err
 	return err
 }
 
-func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
-	req := msg.payload.(syncPublishRequest)
+func (b *basicEventBus) doUnsubscribeAll(msg EventBusMessage) error {
+	req := msg.Payload.(subscriptionRequest)
+	subscriber := req.subscriber
 
 	// Extract context from the message (guaranteed non-nil by public API)
-	ctx := msg.ctx
+	ctx := msg.Ctx
+
+	// Count how many subscriptions we're removing for metrics
+	subscriptionCount := 0
+	if currentSubscriptions, exists := b.subscriptions[subscriber]; exists {
+		subscriptionCount = len(currentSubscriptions)
+	}
+
+	delete(b.subscriptions, subscriber)
+
+	// Update subscriber gauge
+	if b.subscriberGauge != nil {
+		subscriberCount := float64(len(b.subscriptions))
+		b.subscriberGauge.Set(ctx, subscriberCount)
+	}
+
+	// Add subscription count to tracing if available
+	if b.tracingProvider != nil {
+		// Get the current span from context if it exists
+		// This is a simplified approach - in a real implementation you might want to extract the span
+		// For now, we'll just log the count
+		b.logger.Debug("UnsubscribeAll completed", zap.Int("subscription_count", subscriptionCount))
+	}
+
+	err := subscriber.OnUnsubscribe(ctx, "")
+	req.responseCh <- err
+	return err
+}
+
+func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
+	req := msg.Payload.(syncPublishRequest)
+
+	// Extract context from the message (guaranteed non-nil by public API)
+	ctx := msg.Ctx
 
 	// Process the message just like a regular event, but track any errors
 	var publishError error
@@ -460,9 +589,9 @@ func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
 
 	for subscriber := range b.subscriptions {
 		for _, matcher := range b.subscriptions[subscriber] {
-			if ok, fields := matcher(msg.topic); ok {
+			if ok, fields := matcher(msg.Topic); ok {
 				eventCount++
-				if err := subscriber.OnEvent(ctx, msg.topic, req.payload, fields); err != nil {
+				if err := subscriber.OnEvent(ctx, msg.Topic, req.payload, fields); err != nil {
 					if publishError == nil {
 						publishError = err // Store first error
 					} else {
@@ -480,18 +609,8 @@ func (b *basicEventBus) doPublishSync(msg eventBusMessage) error {
 	return publishError
 }
 
-func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscriber) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	delete(b.subscriptions, subscriber)
-
-	return subscriber.OnUnsubscribe(ctx, "")
-}
-
 // accept sends a message to the event bus's channel (for publish operations - no response needed)
-func (b *basicEventBus) accept(msg eventBusMessage) {
+func (b *basicEventBus) accept(msg EventBusMessage) {
 	// Quick atomic check - no mutex needed
 	if atomic.LoadInt32(&b.started) == 0 {
 		b.logger.Warn("Event bus not started, message ignored")
@@ -509,7 +628,7 @@ func (b *basicEventBus) accept(msg eventBusMessage) {
 }
 
 // acceptWithResponse sends a subscription message and handles error responses
-func (b *basicEventBus) acceptWithResponse(msg eventBusMessage, responseCh chan error) {
+func (b *basicEventBus) acceptWithResponse(msg EventBusMessage, responseCh chan error) {
 	sendErrorResponse := func(err error) {
 		responseCh <- err
 	}
@@ -562,4 +681,24 @@ func getObservabilityBufferSize(config *ObservabilityConfig) int {
 		return config.BufferSize
 	}
 	return 1000 // Default buffer size
+}
+
+// EventBusses implement the Subscriber interface and can be subscribed to other event busses
+// Events received from other event busses are published to this event bus
+func (b *basicEventBus) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	b.Publish(ctx, topic, message)
+
+	return nil
+}
+
+func (b *basicEventBus) OnSubscribe(ctx context.Context, topic string) error {
+	return nil
+}
+
+func (b *basicEventBus) OnUnsubscribe(ctx context.Context, topic string) error {
+	return nil
+}
+
+func (b *basicEventBus) PassThrough(msg EventBusMessage) error {
+	return nil
 }

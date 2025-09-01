@@ -2,18 +2,19 @@ package vinculum
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/amir-yaghoubi/mqttpattern"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type Subscriber interface {
 	OnSubscribe(ctx context.Context, topic string) error
 	OnUnsubscribe(ctx context.Context, topic string) error
 	OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error
+
+	// PassThrough is used to pass the message to the next subscriber in the chain, eg to handle
+	// cases like request responses.
+	PassThrough(msg EventBusMessage) error
 }
 
 type BaseSubscriber struct {
@@ -31,17 +32,21 @@ func (b *BaseSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return nil
 }
 
+func (b *BaseSubscriber) PassThrough(msg EventBusMessage) error {
+	return nil
+}
+
 type matcher func(topic string) (bool, map[string]string)
 
-func makeMatcher(subscribeMsg eventBusMessage) matcher {
-	topicPattern := subscribeMsg.topic
+func makeMatcher(subscribeMsg EventBusMessage) matcher {
+	topicPattern := subscribeMsg.Topic
 
-	switch subscribeMsg.msgType {
-	case messageTypeSubscribe:
-		pattern := subscribeMsg.topic
+	switch subscribeMsg.MsgType {
+	case MessageTypeSubscribe:
+		pattern := subscribeMsg.Topic
 
-		hashIndex := strings.Index(subscribeMsg.topic, "#")
-		plusIndex := strings.Index(subscribeMsg.topic, "+")
+		hashIndex := strings.Index(subscribeMsg.Topic, "#")
+		plusIndex := strings.Index(subscribeMsg.Topic, "+")
 
 		if hashIndex == -1 && plusIndex == -1 {
 			// exact match
@@ -53,7 +58,7 @@ func makeMatcher(subscribeMsg eventBusMessage) matcher {
 				return mqttpattern.Matches(pattern, topic), nil
 			}
 		}
-	case messageTypeSubscribeWithExtraction:
+	case MessageTypeSubscribeWithExtraction:
 		return func(topic string) (bool, map[string]string) {
 			if mqttpattern.Matches(topicPattern, topic) {
 				return true, mqttpattern.Extract(topicPattern, topic)
@@ -64,81 +69,4 @@ func makeMatcher(subscribeMsg eventBusMessage) matcher {
 	}
 
 	panic("unsupported message type")
-}
-
-// LoggingSubscriber is a BaseSubscriber that logs all method calls for debugging and demonstration
-type LoggingSubscriber struct {
-	BaseSubscriber
-	logger   *zap.Logger
-	logLevel zapcore.Level
-	name     string // Optional name for identification in logs
-}
-
-// NewLoggingSubscriber creates a new LoggingSubscriber with the specified logger and log level
-func NewLoggingSubscriber(logger *zap.Logger, logLevel zapcore.Level) *LoggingSubscriber {
-	return &LoggingSubscriber{
-		logger:   logger,
-		logLevel: logLevel,
-		name:     "LoggingSubscriber",
-	}
-}
-
-// NewNamedLoggingSubscriber creates a new LoggingSubscriber with a custom name for identification
-func NewNamedLoggingSubscriber(logger *zap.Logger, logLevel zapcore.Level, name string) *LoggingSubscriber {
-	return &LoggingSubscriber{
-		logger:   logger,
-		logLevel: logLevel,
-		name:     name,
-	}
-}
-
-// OnSubscribe logs subscription events
-func (l *LoggingSubscriber) OnSubscribe(ctx context.Context, topic string) error {
-	l.logger.Log(l.logLevel, "OnSubscribe called",
-		zap.String("subscriber", l.name),
-		zap.String("topic", topic),
-	)
-
-	// Call parent implementation (which is empty, but maintains the pattern)
-	return l.BaseSubscriber.OnSubscribe(ctx, topic)
-}
-
-// OnUnsubscribe logs unsubscription events
-func (l *LoggingSubscriber) OnUnsubscribe(ctx context.Context, topic string) error {
-	l.logger.Log(l.logLevel, "OnUnsubscribe called",
-		zap.String("subscriber", l.name),
-		zap.String("topic", topic),
-	)
-
-	// Call parent implementation (which is empty, but maintains the pattern)
-	return l.BaseSubscriber.OnUnsubscribe(ctx, topic)
-}
-
-// OnEvent logs event reception with full details
-func (l *LoggingSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
-	// Convert message to string for logging (handle various types safely)
-	var messageStr string
-	switch v := message.(type) {
-	case string:
-		messageStr = v
-	case []byte:
-		messageStr = string(v)
-	case nil:
-		messageStr = "<nil>"
-	default:
-		messageStr = fmt.Sprintf("%v", v)
-	}
-
-	// The fields are already structured as a map, so we can log them directly via zap.Any
-
-	l.logger.Log(l.logLevel, "OnEvent called",
-		zap.String("subscriber", l.name),
-		zap.String("topic", topic),
-		zap.String("message", messageStr),
-		zap.Any("extractedFields", fields),
-		zap.Int("fieldCount", len(fields)),
-	)
-
-	// Call parent implementation (which is empty, but maintains the pattern)
-	return l.BaseSubscriber.OnEvent(ctx, topic, message, fields)
 }

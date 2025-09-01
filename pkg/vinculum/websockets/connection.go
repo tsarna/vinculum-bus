@@ -359,6 +359,10 @@ func (c *Connection) OnUnsubscribe(ctx context.Context, topic string) error {
 	return nil
 }
 
+func (c *Connection) PassThrough(msg vinculum.EventBusMessage) error {
+	return nil
+}
+
 // OnEvent is called when an event is published to a topic this connection is subscribed to.
 // This method forwards the event to the WebSocket client.
 func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {

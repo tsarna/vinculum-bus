@@ -2,12 +2,7 @@ package vinculum
 
 import (
 	"context"
-	"fmt"
 	"testing"
-	"time"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest"
 )
 
 func TestBaseSubscriber(t *testing.T) {
@@ -30,9 +25,9 @@ func TestBaseSubscriber(t *testing.T) {
 
 func TestMakeMatcherExactMatch(t *testing.T) {
 	// Test exact match (no wildcards)
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "exact/topic/match",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "exact/topic/match",
 	}
 
 	matcher := makeMatcher(msg)
@@ -69,9 +64,9 @@ func TestMakeMatcherExactMatch(t *testing.T) {
 
 func TestMakeMatcherSingleLevelWildcard(t *testing.T) {
 	// Test single-level wildcard (+)
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "test/+/topic",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "test/+/topic",
 	}
 
 	matcher := makeMatcher(msg)
@@ -121,9 +116,9 @@ func TestMakeMatcherSingleLevelWildcard(t *testing.T) {
 
 func TestMakeMatcherMultiLevelWildcard(t *testing.T) {
 	// Test multi-level wildcard (#)
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "test/#",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "test/#",
 	}
 
 	matcher := makeMatcher(msg)
@@ -162,9 +157,9 @@ func TestMakeMatcherMultiLevelWildcard(t *testing.T) {
 
 func TestMakeMatcherCombinedWildcards(t *testing.T) {
 	// Test combination of wildcards
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "api/+/users/#",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "api/+/users/#",
 	}
 
 	matcher := makeMatcher(msg)
@@ -199,9 +194,9 @@ func TestMakeMatcherCombinedWildcards(t *testing.T) {
 
 func TestMakeMatcherWithExtraction(t *testing.T) {
 	// Test parameter extraction
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribeWithExtraction,
-		topic:   "user/+userId/profile/+action",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribeWithExtraction,
+		Topic:   "user/+userId/profile/+action",
 	}
 
 	matcher := makeMatcher(msg)
@@ -250,9 +245,9 @@ func TestMakeMatcherWithExtraction(t *testing.T) {
 
 func TestMakeMatcherExtractionWithWildcards(t *testing.T) {
 	// Test extraction with MQTT wildcards
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribeWithExtraction,
-		topic:   "sensor/+sensorId/data/+type",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribeWithExtraction,
+		Topic:   "sensor/+sensorId/data/+type",
 	}
 
 	matcher := makeMatcher(msg)
@@ -287,9 +282,9 @@ func TestMakeMatcherExtractionWithWildcards(t *testing.T) {
 
 func TestMakeMatcherEmptyTopics(t *testing.T) {
 	// Test with empty topic
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "",
 	}
 
 	matcher := makeMatcher(msg)
@@ -308,9 +303,9 @@ func TestMakeMatcherEmptyTopics(t *testing.T) {
 
 func TestMakeMatcherSpecialCharacters(t *testing.T) {
 	// Test with topics containing special characters
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "device/sensor-01/temp_data",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "device/sensor-01/temp_data",
 	}
 
 	matcher := makeMatcher(msg)
@@ -335,9 +330,9 @@ func TestMakeMatcherSpecialCharacters(t *testing.T) {
 
 func TestMakeMatcherPanicOnUnsupportedType(t *testing.T) {
 	// Test that unsupported message types cause panic
-	msg := eventBusMessage{
-		msgType: messageType(999), // Invalid message type
-		topic:   "test/topic",
+	msg := EventBusMessage{
+		MsgType: MessageType(999), // Invalid message type
+		Topic:   "test/topic",
 	}
 
 	defer func() {
@@ -353,9 +348,9 @@ func TestMakeMatcherEdgeCases(t *testing.T) {
 	// Test edge cases with wildcard placement
 
 	// Wildcard at beginning
-	msg := eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "+/test",
+	msg := EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "+/test",
 	}
 	matcher := makeMatcher(msg)
 
@@ -372,9 +367,9 @@ func TestMakeMatcherEdgeCases(t *testing.T) {
 	}
 
 	// Wildcard at end
-	msg = eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "test/+",
+	msg = EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "test/+",
 	}
 	matcher = makeMatcher(msg)
 
@@ -384,9 +379,9 @@ func TestMakeMatcherEdgeCases(t *testing.T) {
 	}
 
 	// Multiple single-level wildcards
-	msg = eventBusMessage{
-		msgType: messageTypeSubscribe,
-		topic:   "+/+/+",
+	msg = EventBusMessage{
+		MsgType: MessageTypeSubscribe,
+		Topic:   "+/+/+",
 	}
 	matcher = makeMatcher(msg)
 
@@ -399,168 +394,4 @@ func TestMakeMatcherEdgeCases(t *testing.T) {
 	if matches {
 		t.Error("Expected insufficient levels to not match multiple wildcards")
 	}
-}
-
-func TestNewLoggingSubscriber(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	// Test basic constructor
-	subscriber := NewLoggingSubscriber(logger, zap.InfoLevel)
-	if subscriber == nil {
-		t.Fatal("NewLoggingSubscriber returned nil")
-	}
-
-	if subscriber.logger != logger {
-		t.Error("Logger not set correctly")
-	}
-
-	if subscriber.logLevel != zap.InfoLevel {
-		t.Error("Log level not set correctly")
-	}
-
-	if subscriber.name != "LoggingSubscriber" {
-		t.Error("Default name not set correctly")
-	}
-}
-
-func TestNewNamedLoggingSubscriber(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	customName := "MyCustomSubscriber"
-
-	subscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, customName)
-	if subscriber == nil {
-		t.Fatal("NewNamedLoggingSubscriber returned nil")
-	}
-
-	if subscriber.logger != logger {
-		t.Error("Logger not set correctly")
-	}
-
-	if subscriber.logLevel != zap.DebugLevel {
-		t.Error("Log level not set correctly")
-	}
-
-	if subscriber.name != customName {
-		t.Error("Custom name not set correctly")
-	}
-}
-
-func TestLoggingSubscriberOnSubscribe(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	subscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "TestSubscriber")
-
-	// This should log without error
-	subscriber.OnSubscribe(context.Background(), "test/topic")
-	subscriber.OnSubscribe(context.Background(), "user/+userId/profile")
-	subscriber.OnSubscribe(context.Background(), "device/#")
-
-	// Test doesn't crash and methods can be called multiple times
-}
-
-func TestLoggingSubscriberOnUnsubscribe(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	subscriber := NewNamedLoggingSubscriber(logger, zap.WarnLevel, "TestSubscriber")
-
-	// This should log without error
-	subscriber.OnUnsubscribe(context.Background(), "test/topic")
-	subscriber.OnUnsubscribe(context.Background(), "user/+userId/profile")
-	subscriber.OnUnsubscribe(context.Background(), "")
-
-	// Test doesn't crash and methods can be called multiple times
-}
-
-func TestLoggingSubscriberOnEvent(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	subscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, "TestSubscriber")
-
-	// Test with string message
-	subscriber.OnEvent(context.Background(), "test/topic", "string message", nil)
-
-	// Test with map message
-	mapMessage := map[string]interface{}{
-		"key1": "value1",
-		"key2": 42,
-	}
-	subscriber.OnEvent(context.Background(), "api/data", mapMessage, nil)
-
-	// Test with extracted fields
-	fields := map[string]string{
-		"userId": "123",
-		"action": "login",
-	}
-	subscriber.OnEvent(context.Background(), "user/123/login", "User logged in", fields)
-
-	// Test with nil message
-	subscriber.OnEvent(context.Background(), "empty/topic", nil, nil)
-
-	// Test with byte slice message
-	subscriber.OnEvent(context.Background(), "binary/data", []byte("binary data"), nil)
-
-	// Test with various field combinations
-	manyFields := map[string]string{
-		"field1": "value1",
-		"field2": "value2",
-		"field3": "value3",
-	}
-	subscriber.OnEvent(context.Background(), "complex/topic", "complex message", manyFields)
-
-	// Test doesn't crash and methods can be called multiple times
-}
-
-func TestLoggingSubscriberDifferentLogLevels(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	// Test each log level
-	levels := []zap.AtomicLevel{
-		zap.NewAtomicLevelAt(zap.DebugLevel),
-		zap.NewAtomicLevelAt(zap.InfoLevel),
-		zap.NewAtomicLevelAt(zap.WarnLevel),
-		zap.NewAtomicLevelAt(zap.ErrorLevel),
-	}
-
-	for i, level := range levels {
-		subscriber := NewNamedLoggingSubscriber(logger, level.Level(), fmt.Sprintf("Subscriber%d", i))
-
-		subscriber.OnSubscribe(context.Background(), "test/topic")
-		subscriber.OnEvent(context.Background(), "test/topic", "test message", map[string]string{"param": "value"})
-		subscriber.OnUnsubscribe(context.Background(), "test/topic")
-	}
-}
-
-func TestLoggingSubscriberWithEventBus(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-
-	err := eventBus.Start()
-	if err != nil {
-		t.Fatalf("Failed to start event bus: %v", err)
-	}
-	defer eventBus.Stop()
-
-	// Create logging subscribers with different log levels
-	debugSubscriber := NewNamedLoggingSubscriber(logger, zap.DebugLevel, "DebugSubscriber")
-	infoSubscriber := NewNamedLoggingSubscriber(logger, zap.InfoLevel, "InfoSubscriber")
-
-	// Subscribe to topics
-	eventBus.Subscribe(context.Background(), debugSubscriber, "debug/+level/topic")
-	eventBus.Subscribe(context.Background(), infoSubscriber, "info/events/#")
-
-	// Give time for subscriptions to be processed
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish events
-	eventBus.Publish(context.Background(), "debug/high/topic", "Debug message")
-	eventBus.Publish(context.Background(), "info/events/user/login", map[string]interface{}{
-		"userId":    "123",
-		"timestamp": "2024-01-01T12:00:00Z",
-	})
-
-	// Give time for events to be processed
-	time.Sleep(10 * time.Millisecond)
-
-	// Test unsubscribe
-	eventBus.UnsubscribeAll(context.Background(), debugSubscriber)
-
-	// Give time for unsubscription to be processed
-	time.Sleep(10 * time.Millisecond)
 }

@@ -46,6 +46,7 @@ package main
 import (
     "context"
     "github.com/tsarna/vinculum/pkg/vinculum"
+    "github.com/tsarna/vinculum/pkg/vinculum/subutils"
     "go.uber.org/zap"
 )
 
@@ -58,8 +59,8 @@ func main() {
     eventBus.Start()
     defer eventBus.Stop()
     
-    // Create subscriber
-    subscriber := vinculum.NewNamedLoggingSubscriber(logger, zap.InfoLevel, "MyService")
+    // Create subscriber (nil = standalone logging subscriber)
+    subscriber := subutils.NewNamedLoggingSubscriber(nil, logger, zap.InfoLevel, "MyService")
     
     // Subscribe to topic pattern (context propagation enabled)
     eventBus.Subscribe(ctx, subscriber, "users/+userId/events")
@@ -204,9 +205,12 @@ assert.Equal(t, "value", events[0].Fields["param"])
 ### Logging Subscriber for Debugging
 
 ```go
-// Logs all events with structured data
-debugSub := vinculum.NewNamedLoggingSubscriber(logger, zap.DebugLevel, "Debug")
+// Logs all events with structured data (standalone mode)
+debugSub := subutils.NewNamedLoggingSubscriber(nil, logger, zap.DebugLevel, "Debug")
 eventBus.Subscribe(ctx, debugSub, "#") // Subscribe to everything
+
+// Or wrap another subscriber to add logging
+// wrappedSub := subutils.NewNamedLoggingSubscriber(mySubscriber, logger, zap.DebugLevel, "Debug")
 ```
 
 ## 🏗️ Architecture

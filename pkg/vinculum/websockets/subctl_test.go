@@ -127,6 +127,10 @@ func (m *mockSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return nil
 }
 
+func (m *mockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+	return nil
+}
+
 // testSubscriptionController is a test implementation that demonstrates advanced features
 type testSubscriptionController struct {
 	subscribeCalled   bool
@@ -152,6 +156,7 @@ func (t *testSubscriptionController) Unsubscribe(ctx context.Context, subscriber
 // mockEventBus implements vinculum.EventBus for testing
 type mockEventBus struct{}
 
+// EventBus methods
 func (m *mockEventBus) Subscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
 	return nil
 }
@@ -177,5 +182,22 @@ func (m *mockEventBus) Start() error {
 }
 
 func (m *mockEventBus) Stop() error {
+	return nil
+}
+
+// Subscriber methods (EventBus embeds Subscriber)
+func (m *mockEventBus) OnSubscribe(ctx context.Context, topic string) error {
+	return nil
+}
+
+func (m *mockEventBus) OnUnsubscribe(ctx context.Context, topic string) error {
+	return nil
+}
+
+func (m *mockEventBus) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	return nil
+}
+
+func (m *mockEventBus) PassThrough(msg vinculum.EventBusMessage) error {
 	return nil
 }
