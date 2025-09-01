@@ -13,6 +13,7 @@ import (
 
 // asyncTestSubscriber is a subscriber for testing that tracks all operations
 type asyncTestSubscriber struct {
+	mu           sync.Mutex
 	subscribes   []string
 	unsubscribes []string
 	events       []asyncTestEvent
@@ -30,6 +31,8 @@ func (a *asyncTestSubscriber) OnSubscribe(ctx context.Context, topic string) err
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.subscribes = append(a.subscribes, topic)
 	return nil
 }
@@ -38,6 +41,8 @@ func (a *asyncTestSubscriber) OnUnsubscribe(ctx context.Context, topic string) e
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.unsubscribes = append(a.unsubscribes, topic)
 	return nil
 }
@@ -46,6 +51,8 @@ func (a *asyncTestSubscriber) OnEvent(ctx context.Context, topic string, message
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.events = append(a.events, asyncTestEvent{
 		topic:   topic,
 		message: message,
@@ -58,15 +65,21 @@ func (a *asyncTestSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.passthroughs = append(a.passthroughs, msg)
 	return nil
 }
 
 func (a *asyncTestSubscriber) getCounts() (int, int, int, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return len(a.subscribes), len(a.unsubscribes), len(a.events), len(a.passthroughs)
 }
 
 func (a *asyncTestSubscriber) getEvents() []asyncTestEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	events := make([]asyncTestEvent, len(a.events))
 	copy(events, a.events)
 	return events
@@ -74,7 +87,7 @@ func (a *asyncTestSubscriber) getEvents() []asyncTestEvent {
 
 func TestNewAsyncQueueingSubscriber(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	assert.NotNil(t, asyncSub)
@@ -86,7 +99,7 @@ func TestNewAsyncQueueingSubscriber(t *testing.T) {
 
 func TestNewAsyncQueueingSubscriber_DefaultQueueSize(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 0) // Should use default
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 0).Start() // Should use default
 	defer asyncSub.Close()
 
 	assert.Equal(t, 100, asyncSub.QueueCapacity()) // Default size
@@ -94,7 +107,7 @@ func TestNewAsyncQueueingSubscriber_DefaultQueueSize(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_OnSubscribe(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -116,7 +129,7 @@ func TestAsyncQueueingSubscriber_OnSubscribe(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_OnUnsubscribe(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -138,7 +151,7 @@ func TestAsyncQueueingSubscriber_OnUnsubscribe(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_OnEvent(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -168,7 +181,7 @@ func TestAsyncQueueingSubscriber_OnEvent(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_PassThrough(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -193,31 +206,42 @@ func TestAsyncQueueingSubscriber_PassThrough(t *testing.T) {
 }
 
 func TestAsyncQueueingSubscriber_QueueFull(t *testing.T) {
-	// Create a subscriber with slow processing to fill the queue
+	// Create a subscriber with very slow processing to keep the queue full
 	baseSubscriber := &asyncTestSubscriber{
-		processDelay: 250 * time.Millisecond,
+		processDelay: 1 * time.Second, // Much longer delay to ensure queue stays full
 	}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 1) // Small queue
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 2).Start() // Queue size 2
 	defer asyncSub.Close()
 
 	ctx := context.Background()
 
-	// Fill the queue
+	// Give the goroutine a moment to start and be ready to process
+	time.Sleep(10 * time.Millisecond)
+
+	// With queue size 2 and slow processing, we need to send enough messages to fill:
+	// Message 1: Gets processed immediately (1 sec delay)
+	// Message 2: Goes to buffer slot 1
+	// Message 3: Goes to buffer slot 2 (buffer now full)
+	// Message 4: Should fail with ErrQueueFull
+
 	err := asyncSub.OnEvent(ctx, "topic1", "message1", nil)
 	assert.NoError(t, err)
 
 	err = asyncSub.OnEvent(ctx, "topic2", "message2", nil)
 	assert.NoError(t, err)
 
-	// Next message should fail because queue is full and processing is slow
 	err = asyncSub.OnEvent(ctx, "topic3", "message3", nil)
+	assert.NoError(t, err)
+
+	// Fourth message should fail - queue is now full
+	err = asyncSub.OnEvent(ctx, "topic4", "message4", nil)
 	assert.Error(t, err)
 	assert.Equal(t, ErrQueueFull, err)
 }
 
 func TestAsyncQueueingSubscriber_CloseAndDrain(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 
 	ctx := context.Background()
 
@@ -251,7 +275,7 @@ func TestAsyncQueueingSubscriber_CloseAndDrain(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_ConcurrentOperations(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 100)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 100).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -291,7 +315,7 @@ func TestAsyncQueueingSubscriber_QueueSizeTracking(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{
 		processDelay: 50 * time.Millisecond,
 	}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 	defer asyncSub.Close()
 
 	ctx := context.Background()
@@ -318,7 +342,7 @@ func TestAsyncQueueingSubscriber_QueueSizeTracking(t *testing.T) {
 
 func TestAsyncQueueingSubscriber_CloseMultipleTimes(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
-	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10)
+	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).Start()
 
 	// Close multiple times should not panic or cause issues
 	err1 := asyncSub.Close()
@@ -335,7 +359,7 @@ func TestAsyncQueueingSubscriber_CloseMultipleTimes(t *testing.T) {
 func TestAsyncQueueingSubscriber_WithTicker(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
 	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
-		WithTicker(50 * time.Millisecond) // Fast ticks for testing
+		WithTicker(50 * time.Millisecond).Start() // Fast ticks for testing
 	defer asyncSub.Close()
 
 	// Wait for a few ticks
@@ -349,7 +373,7 @@ func TestAsyncQueueingSubscriber_WithTicker(t *testing.T) {
 func TestAsyncQueueingSubscriber_WithTicker_ZeroInterval(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
 	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
-		WithTicker(0) // Zero interval should disable ticker
+		WithTicker(0).Start() // Zero interval should disable ticker
 	defer asyncSub.Close()
 
 	// Wait a bit
@@ -364,7 +388,7 @@ func TestAsyncQueueingSubscriber_WithTicker_MultipleCallsIgnored(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
 	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
 		WithTicker(100 * time.Millisecond).
-		WithTicker(50 * time.Millisecond) // Second call should be ignored
+		WithTicker(50 * time.Millisecond).Start() // Second call should be ignored
 	defer asyncSub.Close()
 
 	// The ticker should use the first interval (100ms), not the second (50ms)
@@ -385,7 +409,7 @@ func TestAsyncQueueingSubscriber_WithTicker_MultipleCallsIgnored(t *testing.T) {
 func TestAsyncQueueingSubscriber_TickerStopsOnClose(t *testing.T) {
 	baseSubscriber := &asyncTestSubscriber{}
 	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 10).
-		WithTicker(30 * time.Millisecond)
+		WithTicker(30 * time.Millisecond).Start()
 
 	// Wait for a few ticks
 	time.Sleep(80 * time.Millisecond)
@@ -412,7 +436,7 @@ func TestAsyncQueueingSubscriber_TickerWithQueueFull(t *testing.T) {
 		processDelay: 200 * time.Millisecond, // Slow processing
 	}
 	asyncSub := NewAsyncQueueingSubscriber(baseSubscriber, 1). // Very small queue
-									WithTicker(10 * time.Millisecond) // Fast ticks
+									WithTicker(10 * time.Millisecond).Start() // Fast ticks
 	defer asyncSub.Close()
 
 	// Fill the queue with a regular message first

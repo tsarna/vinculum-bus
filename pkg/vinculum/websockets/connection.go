@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
 	"go.uber.org/zap"
 )
 
@@ -40,9 +40,8 @@ type Connection struct {
 	subscriptionController SubscriptionController
 	eventMsg               map[string]any
 
-	// Channel for outbound messages to avoid blocking EventBus
-	outbound chan WebSocketMessage
-	done     chan struct{}
+	// Async subscriber wrapper for handling outbound messages and periodic tasks
+	asyncSubscriber *subutils.AsyncQueueingSubscriber
 
 	// Synchronization for cleanup
 	cleanupOnce sync.Once
@@ -58,17 +57,33 @@ type Connection struct {
 //
 // Returns a new Connection instance that implements the Subscriber interface.
 func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerConfig, subscriptionController SubscriptionController) *Connection {
-	return &Connection{
+	// Create the base connection
+	baseConnection := &Connection{
 		ctx:                    ctx,
 		conn:                   conn,
 		eventBus:               config.eventBus,
 		logger:                 config.logger,
 		config:                 config,
 		subscriptionController: subscriptionController,
-		eventMsg:               make(map[string]any),                          // precreated and reused to avoid allocations
-		outbound:               make(chan WebSocketMessage, config.queueSize), // Buffered channel to prevent blocking
-		done:                   make(chan struct{}),
+		eventMsg:               make(map[string]any), // precreated and reused to avoid allocations
 	}
+
+	// Create the subscriber wrapper chain:
+	// AsyncQueueingSubscriber (async processing + periodic ticks)
+	// Note: WebSocket transforms are still handled in Connection.sendMessage() for now
+	asyncSubscriber := subutils.NewAsyncQueueingSubscriber(baseConnection, config.queueSize)
+
+	// Add ticker for ping/pong if configured and start processing
+	if config.pingInterval > 0 {
+		asyncSubscriber = asyncSubscriber.WithTicker(config.pingInterval).Start()
+	} else {
+		asyncSubscriber = asyncSubscriber.Start()
+	}
+
+	// Store the async subscriber for cleanup
+	baseConnection.asyncSubscriber = asyncSubscriber
+
+	return baseConnection
 }
 
 // Start begins handling the WebSocket connection.
@@ -80,9 +95,10 @@ func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerCo
 func (c *Connection) Start() {
 	c.logger.Debug("Starting WebSocket connection handler")
 
-	// Perform initial subscriptions (bypass subscription controller since these are server-initiated)
+	// Perform initial subscriptions using the async subscriber wrapper
+	// (bypass subscription controller since these are server-initiated)
 	for _, topic := range c.config.initialSubscriptions {
-		if err := c.eventBus.Subscribe(c.ctx, c, topic); err != nil {
+		if err := c.eventBus.Subscribe(c.ctx, c.asyncSubscriber, topic); err != nil {
 			c.logger.Warn("Failed to create initial subscription",
 				zap.String("topic", topic),
 				zap.Error(err),
@@ -94,84 +110,14 @@ func (c *Connection) Start() {
 		}
 	}
 
-	// Start the message sender goroutine for outbound messages and ping handling
-	go c.messageSender()
+	// No need for messageSender goroutine - handled by AsyncQueueingSubscriber
+	c.logger.Debug("Async subscriber wrapper configured with transforms and ticker")
 
 	// Run the message reader directly in this goroutine (blocks until connection closes)
 	c.messageReader()
 
 	c.logger.Debug("WebSocket connection handler stopping")
 	c.cleanup()
-}
-
-// messageSender runs in a goroutine and handles sending messages to the WebSocket client
-// and periodic ping frames for connection health monitoring.
-// This prevents blocking the EventBus when sending messages and ensures all WebSocket
-// writes are serialized through a single goroutine.
-func (c *Connection) messageSender() {
-	defer c.logger.Debug("Message sender goroutine stopped")
-
-	// Set up ping ticker if ping/pong is enabled
-	var pingTicker *time.Ticker
-	var pingChan <-chan time.Time
-
-	if c.config.pingInterval > 0 {
-		pingTicker = time.NewTicker(c.config.pingInterval)
-		pingChan = pingTicker.C
-		c.logger.Debug("Ping/pong health monitoring enabled",
-			zap.Duration("interval", c.config.pingInterval))
-		defer pingTicker.Stop()
-	} else {
-		c.logger.Debug("Ping/pong health monitoring disabled")
-	}
-
-	for {
-		select {
-		case msg, ok := <-c.outbound:
-			if !ok {
-				// Channel closed, exit gracefully
-				return
-			}
-
-			err := c.sendMessage(msg)
-			if err != nil {
-				c.logger.Error("Failed to send WebSocket message",
-					zap.Error(err),
-					zap.String("topic", msg.Topic),
-				)
-
-				// Check if it's a connection error that requires cleanup
-				if websocket.CloseStatus(err) != -1 {
-					c.logger.Debug("WebSocket connection closed, stopping sender")
-					return
-				}
-				// For other errors, continue trying to send other messages
-			}
-
-		case <-pingChan:
-			// Send ping for connection health monitoring
-			c.logger.Debug("Sending ping to client")
-
-			// Create ping context with write timeout
-			pingCtx, cancel := context.WithTimeout(c.ctx, c.config.writeTimeout)
-			err := c.conn.Ping(pingCtx)
-			cancel()
-
-			if err != nil {
-				c.logger.Error("Failed to send ping", zap.Error(err))
-				return
-			}
-			c.logger.Debug("Ping sent successfully")
-
-		case <-c.done:
-			// Cleanup signal received
-			return
-
-		case <-c.ctx.Done():
-			// Context cancelled
-			return
-		}
-	}
 }
 
 // messageReader handles reading messages from the WebSocket client.
@@ -248,17 +194,22 @@ func (c *Connection) sendErrorResponse(id any, errorMsg string) {
 		Error: errorMsg,
 	}
 
-	msg := WebSocketMessage{
-		Ctx:        c.ctx,
-		RawMessage: response,
+	// Create EventBusMessage for error response and send via PassThrough
+	responseMsg := vinculum.EventBusMessage{
+		Ctx:     c.ctx,
+		MsgType: vinculum.MessageTypePassThrough,
+		Topic:   "",       // Error responses don't have topics
+		Payload: response, // WireMessage will be JSON marshaled directly
 	}
 
-	select {
-	case c.outbound <- msg:
-		// Message queued successfully
-	default:
-		// Channel full, log warning
-		c.logger.Warn("Outbound channel full, dropping error response")
+	// Send error response through PassThrough method
+	sendErr := c.PassThrough(responseMsg)
+	if sendErr != nil {
+		c.logger.Warn("Failed to send error response",
+			zap.Any("request_id", id),
+			zap.String("error_message", errorMsg),
+			zap.Error(sendErr),
+		)
 	}
 }
 
@@ -301,26 +252,18 @@ func (c *Connection) cleanup() {
 	c.cleanupOnce.Do(func() {
 		c.logger.Debug("Cleaning up WebSocket connection")
 
-		// Signal message sender to stop (safe to close multiple times)
-		select {
-		case <-c.done:
-			// Already closed
-		default:
-			close(c.done)
-		}
-
-		// Unsubscribe from EventBus
-		err := c.eventBus.UnsubscribeAll(c.ctx, c)
+		// Unsubscribe from EventBus using the async subscriber wrapper
+		err := c.eventBus.UnsubscribeAll(c.ctx, c.asyncSubscriber)
 		if err != nil {
 			c.logger.Warn("Failed to unsubscribe from EventBus during cleanup", zap.Error(err))
 		}
 
-		// Close outbound channel (safe to close multiple times with select)
-		select {
-		case <-c.outbound:
-			// Channel already closed or empty
-		default:
-			close(c.outbound)
+		// Close the async subscriber (this will stop the background goroutine and process remaining messages)
+		if c.asyncSubscriber != nil {
+			err = c.asyncSubscriber.Close()
+			if err != nil {
+				c.logger.Warn("Failed to close async subscriber during cleanup", zap.Error(err))
+			}
 		}
 
 		// Close WebSocket connection gracefully (if not already closed)
@@ -359,12 +302,85 @@ func (c *Connection) OnUnsubscribe(ctx context.Context, topic string) error {
 	return nil
 }
 
+// PassThrough handles messages that should be processed directly without going through
+// the normal event processing pipeline. This includes:
+// - MessageTypeTick: Periodic ping messages for connection health monitoring
+// - Other message types: Direct WebSocket message sending (e.g., responses)
 func (c *Connection) PassThrough(msg vinculum.EventBusMessage) error {
+	switch msg.MsgType {
+	case vinculum.MessageTypeTick:
+		return c.handleTick(msg.Ctx)
+	default:
+		return c.sendRawMessage(msg)
+	}
+}
+
+// handleTick processes a tick message by sending a WebSocket ping for connection health monitoring
+func (c *Connection) handleTick(ctx context.Context) error {
+	if ctx == nil {
+		ctx = c.ctx
+	}
+
+	c.logger.Debug("Sending ping to client")
+
+	// Create ping context with write timeout
+	pingCtx, cancel := context.WithTimeout(ctx, c.config.writeTimeout)
+	defer cancel()
+
+	err := c.conn.Ping(pingCtx)
+	if err != nil {
+		c.logger.Error("Failed to send ping", zap.Error(err))
+		return err
+	}
+
+	c.logger.Debug("Ping sent successfully")
+	return nil
+}
+
+// sendRawMessage sends a message directly over the WebSocket connection.
+// The message payload should be a structure that can be JSON marshaled (e.g., WireMessage).
+// This bypasses the event transformation pipeline and is used for responses and control messages.
+func (c *Connection) sendRawMessage(msg vinculum.EventBusMessage) error {
+	if msg.Payload == nil {
+		c.logger.Warn("Attempted to send WebSocket message with nil payload")
+		return nil // Treat as no-op
+	}
+
+	// Marshal the payload directly to JSON
+	data, err := json.Marshal(msg.Payload)
+	if err != nil {
+		c.logger.Error("Failed to marshal WebSocket message payload",
+			zap.Error(err),
+			zap.Any("payload", msg.Payload),
+		)
+		return err
+	}
+
+	// Create write context with timeout
+	writeCtx, cancel := context.WithTimeout(msg.Ctx, c.config.writeTimeout)
+	defer cancel()
+
+	// Send over WebSocket with write deadline
+	err = c.conn.Write(writeCtx, websocket.MessageText, data)
+	if err != nil {
+		c.logger.Error("Failed to send WebSocket message",
+			zap.Error(err),
+			zap.String("topic", msg.Topic),
+		)
+		return err
+	}
+
+	c.logger.Debug("WebSocket message sent successfully",
+		zap.String("topic", msg.Topic),
+		zap.Any("payload", msg.Payload),
+	)
 	return nil
 }
 
 // OnEvent is called when an event is published to a topic this connection is subscribed to.
 // This method forwards the event to the WebSocket client.
+// Note: This method is called directly by the AsyncQueueingSubscriber wrapper,
+// so it sends messages directly without additional queuing.
 func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
 	c.logger.Debug("Forwarding event to WebSocket client",
 		zap.String("topic", topic),
@@ -372,7 +388,7 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 		zap.Any("fields", fields),
 	)
 
-	// Create event message for WebSocket client (non-blocking)
+	// Create event message for WebSocket client
 	msg := WebSocketMessage{
 		Ctx:     ctx,
 		Topic:   topic,
@@ -380,14 +396,14 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 		Fields:  fields,
 	}
 
-	select {
-	case c.outbound <- msg:
-		// Message queued successfully
-	default:
-		// Channel full, log warning but don't block EventBus
-		c.logger.Warn("Outbound channel full, dropping event message",
+	// Send message directly (we're already in the async subscriber's goroutine)
+	err := c.sendMessage(msg)
+	if err != nil {
+		c.logger.Error("Failed to send WebSocket event message",
+			zap.Error(err),
 			zap.String("topic", topic),
 		)
+		return err
 	}
 
 	return nil
@@ -462,21 +478,21 @@ func (c *Connection) respondToRequest(ctx context.Context, request WireMessage, 
 		response.Error = err.Error()
 	}
 
-	msg := WebSocketMessage{
-		Ctx:        ctx,
-		RawMessage: response,
+	// Create EventBusMessage for response and send via PassThrough
+	responseMsg := vinculum.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: vinculum.MessageTypePassThrough,
+		Topic:   "",       // Responses don't have topics
+		Payload: response, // WireMessage will be JSON marshaled directly
 	}
 
-	// Send response through the outbound channel to ensure thread safety
-	// All WebSocket writes must go through the messageSender goroutine
-	select {
-	case c.outbound <- msg:
-		// Response queued successfully
-	default:
-		// Channel full, log warning but don't block message reader
-		c.logger.Warn("Outbound channel full, dropping response message",
+	// Send response through PassThrough method
+	sendErr := c.PassThrough(responseMsg)
+	if sendErr != nil {
+		c.logger.Warn("Failed to send response message",
 			zap.String("response_kind", response.Kind),
 			zap.Any("request_id", request.Id),
+			zap.Error(sendErr),
 		)
 	}
 }

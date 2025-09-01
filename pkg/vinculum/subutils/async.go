@@ -58,10 +58,6 @@ func NewAsyncQueueingSubscriber(wrapped vinculum.Subscriber, queueSize int) *Asy
 		done:    make(chan struct{}),
 	}
 
-	// Start the background processor
-	subscriber.wg.Add(1)
-	go subscriber.processQueue()
-
 	return subscriber
 }
 
@@ -75,13 +71,24 @@ func NewAsyncQueueingSubscriber(wrapped vinculum.Subscriber, queueSize int) *Asy
 // Example:
 //
 //	asyncSub := subutils.NewAsyncQueueingSubscriber(baseSubscriber, 100).
-//		WithTicker(30 * time.Second) // Send tick every 30 seconds
+//		WithTicker(30 * time.Second).
+//		Start() // Must call Start() to begin processing
 //
 // Note: The ticker is automatically cleaned up when Close() is called.
+// This method must be called before Start() to avoid race conditions.
 func (a *AsyncQueueingSubscriber) WithTicker(interval time.Duration) *AsyncQueueingSubscriber {
 	if interval > 0 && a.ticker == nil {
 		a.ticker = time.NewTicker(interval)
 	}
+	return a
+}
+
+// Start begins processing messages in a background goroutine.
+// This method must be called after configuration (WithTicker, etc.) to start processing.
+// Returns the same AsyncQueueingSubscriber instance for method chaining.
+func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
+	a.wg.Add(1)
+	go a.processQueue()
 	return a
 }
 
