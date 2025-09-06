@@ -131,12 +131,8 @@ func (c *Connection) messageReader() {
 		default:
 		}
 
-		// Set read deadline before each read operation
-		readCtx, cancel := context.WithTimeout(c.ctx, c.config.readTimeout)
-
-		// Read message from WebSocket with timeout context
-		_, data, err := c.conn.Read(readCtx)
-		cancel() // Always cancel to free resources
+		// Read message from WebSocket (no timeout - pings handle connection health)
+		_, data, err := c.conn.Read(c.ctx)
 		if err != nil {
 			closeStatus := websocket.CloseStatus(err)
 			if closeStatus != -1 {
@@ -270,12 +266,25 @@ func (c *Connection) OnUnsubscribe(ctx context.Context, topic string) error {
 // - MessageTypeTick: Periodic ping messages for connection health monitoring
 // - Other message types: Direct WebSocket message sending (e.g., responses)
 func (c *Connection) PassThrough(msg vinculum.EventBusMessage) error {
+	var err error
 	switch msg.MsgType {
 	case vinculum.MessageTypeTick:
-		return c.handleTick(msg.Ctx)
+		err = c.handleTick(msg.Ctx)
 	default:
-		return c.sendPacket(msg.Ctx, msg.Payload)
+		err = c.sendPacket(msg.Ctx, msg.Payload)
 	}
+
+	if err != nil {
+		// If we can't send to the client, the connection is likely broken
+		// Trigger cleanup to remove this connection and its subscriptions
+		c.logger.Info("Connection write failed in PassThrough, cleaning up connection",
+			zap.Int("msgType", int(msg.MsgType)),
+			zap.Error(err),
+		)
+		go c.cleanup() // Run cleanup in goroutine to avoid blocking
+	}
+
+	return err
 }
 
 // handleTick processes a tick message by sending a WebSocket ping for connection health monitoring
@@ -338,7 +347,19 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 	c.eventMsg["t"] = topic
 	c.eventMsg["d"] = message
 
-	return c.sendPacket(ctx, c.eventMsg)
+	err := c.sendPacket(ctx, c.eventMsg)
+	if err != nil {
+		// If we can't send to the client, the connection is likely broken
+		// Trigger cleanup to remove this connection and its subscriptions
+		c.logger.Info("Connection write failed, cleaning up connection",
+			zap.String("topic", topic),
+			zap.Error(err),
+		)
+		go c.cleanup() // Run cleanup in goroutine to avoid blocking
+		return err
+	}
+
+	return nil
 }
 
 func (c *Connection) respondToRequest(ctx context.Context, request websockets.WireMessage, err error) {
@@ -407,15 +428,22 @@ func handleRequest(c *Connection, ctx context.Context, request websockets.WireMe
 		// Use subscription controller to validate/modify the subscription
 		err = c.subscriptionController.Subscribe(ctx, c, request.Topic)
 		if err == nil {
-			// Controller approved, perform the actual subscription
-			err = c.eventBus.Subscribe(ctx, c, request.Topic)
+			// Controller approved, perform the actual subscription using the async wrapper
+			err = c.eventBus.Subscribe(ctx, c.asyncSubscriber, request.Topic)
 		}
 	case websockets.MessageKindUnsubscribe:
 		// Use subscription controller to validate/modify the unsubscription
 		err = c.subscriptionController.Unsubscribe(ctx, c, request.Topic)
 		if err == nil {
-			// Controller approved, perform the actual unsubscription
-			err = c.eventBus.Unsubscribe(ctx, c, request.Topic)
+			// Controller approved, perform the actual unsubscription using the async wrapper
+			err = c.eventBus.Unsubscribe(ctx, c.asyncSubscriber, request.Topic)
+		}
+	case websockets.MessageKindUnsubscribeAll:
+		// Use subscription controller to validate the unsubscribe all operation
+		err = c.subscriptionController.UnsubscribeAll(ctx, c)
+		if err == nil {
+			// Controller approved, perform the actual unsubscribe all using the async wrapper
+			err = c.eventBus.UnsubscribeAll(ctx, c.asyncSubscriber)
 		}
 	default:
 		err = fmt.Errorf("unsupported request type: %s", request.Kind)

@@ -102,6 +102,11 @@ func TestSubscriptionControllers(t *testing.T) {
 		assert.Error(t, err)
 		assert.True(t, controller.unsubscribeCalled)
 		assert.Contains(t, err.Error(), "unsubscription denied")
+
+		// Should allow unsubscribe all
+		err = controller.UnsubscribeAll(ctx, mockSubscriber)
+		assert.NoError(t, err)
+		assert.True(t, controller.unsubscribeAllCalled)
 	})
 }
 
@@ -133,8 +138,9 @@ func (m *mockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
 
 // testSubscriptionController is a test implementation that demonstrates advanced features
 type testSubscriptionController struct {
-	subscribeCalled   bool
-	unsubscribeCalled bool
+	subscribeCalled      bool
+	unsubscribeCalled    bool
+	unsubscribeAllCalled bool
 }
 
 func (t *testSubscriptionController) Subscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
@@ -150,6 +156,11 @@ func (t *testSubscriptionController) Unsubscribe(ctx context.Context, subscriber
 	if topicPattern == "denied/topic" {
 		return fmt.Errorf("unsubscription denied")
 	}
+	return nil
+}
+
+func (t *testSubscriptionController) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+	t.unsubscribeAllCalled = true
 	return nil
 }
 

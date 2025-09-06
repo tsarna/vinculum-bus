@@ -31,6 +31,16 @@ type SubscriptionController interface {
 	// If this method calls eventBus.Unsubscribe itself, it should return an error
 	// to prevent the original unsubscription from also being processed.
 	Unsubscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error
+
+	// UnsubscribeAll is called when a client wants to unsubscribe from all topics.
+	// It can:
+	//   - Return nil to allow the unsubscribe all as-is
+	//   - Return an error to deny the unsubscribe all
+	//   - Modify the unsubscription by calling eventBus.UnsubscribeAll or specific unsubscribes
+	//
+	// If this method calls eventBus.UnsubscribeAll itself, it should return an error
+	// to prevent the original unsubscribe all from also being processed.
+	UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error
 }
 
 // SubscriptionControllerFactory creates a SubscriptionController instance.
@@ -57,6 +67,11 @@ func (p *PassthroughSubscriptionController) Subscribe(ctx context.Context, subsc
 // Unsubscribe allows the unsubscription as-is by returning nil.
 func (p *PassthroughSubscriptionController) Unsubscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
 	return nil // Allow unsubscription as-is
+}
+
+// UnsubscribeAll allows the unsubscribe all as-is by returning nil.
+func (p *PassthroughSubscriptionController) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+	return nil // Allow unsubscribe all as-is
 }
 
 // Example subscription controller implementations
@@ -94,4 +109,9 @@ func (t *TopicPrefixSubscriptionController) Unsubscribe(ctx context.Context, sub
 		return nil // Allow unsubscription
 	}
 	return fmt.Errorf("unsubscriptions only allowed from topics with prefix: %s", t.prefix)
+}
+
+// UnsubscribeAll allows unsubscribing from all topics - no prefix restrictions apply.
+func (t *TopicPrefixSubscriptionController) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+	return nil // Allow unsubscribe all
 }

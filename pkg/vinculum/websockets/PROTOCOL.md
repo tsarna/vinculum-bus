@@ -46,6 +46,19 @@ Unsubscribe from a topic pattern.
 - `t`: Topic pattern to unsubscribe from
 - `i`: Optional client-chosen identifier for response matching
 
+#### Unsubscribe All (`"U"`)
+Unsubscribe from all topic patterns.
+
+```json
+{
+  "k": "U",
+  "i": "req-125"
+}
+```
+
+- `i`: Optional client-chosen identifier for response matching
+- `t`: Not used (topic field is ignored for UnsubscribeAll)
+
 ### Server to Client
 
 #### Acknowledgment (`"a"`)

@@ -4,8 +4,9 @@ package websockets
 // These correspond to the "k" (kind) field in wire messages.
 const (
 	// Client to Server message kinds
-	MessageKindSubscribe   = "s" // Subscribe to a topic pattern
-	MessageKindUnsubscribe = "u" // Unsubscribe from a topic pattern
+	MessageKindSubscribe      = "s" // Subscribe to a topic pattern
+	MessageKindUnsubscribe    = "u" // Unsubscribe from a topic pattern
+	MessageKindUnsubscribeAll = "U" // Unsubscribe from all topics
 
 	// Server to Client message kinds
 	MessageKindAck  = "a" // Positive acknowledgment of client request

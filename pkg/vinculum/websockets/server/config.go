@@ -17,7 +17,6 @@ type ListenerConfig struct {
 	logger                 *zap.Logger
 	queueSize              int
 	pingInterval           time.Duration
-	readTimeout            time.Duration
 	writeTimeout           time.Duration
 	eventAuth              EventAuthFunc
 	subscriptionController SubscriptionControllerFactory
@@ -62,7 +61,6 @@ func NewListenerConfig() *ListenerConfig {
 	return &ListenerConfig{
 		queueSize:              DefaultQueueSize,
 		pingInterval:           DefaultPingInterval,
-		readTimeout:            DefaultReadTimeout,
 		writeTimeout:           DefaultWriteTimeout,
 		eventAuth:              DenyAllEvents,                        // Secure default: deny all client events
 		subscriptionController: NewPassthroughSubscriptionController, // Default: allow all subscriptions
@@ -104,18 +102,6 @@ func (c *ListenerConfig) WithQueueSize(size int) *ListenerConfig {
 func (c *ListenerConfig) WithPingInterval(interval time.Duration) *ListenerConfig {
 	if interval >= 0 {
 		c.pingInterval = interval
-	}
-	return c
-}
-
-// WithReadTimeout sets the timeout for reading messages from WebSocket clients.
-// This prevents connections from hanging indefinitely when clients stop responding.
-// Should be longer than ping interval to allow for pong responses.
-//
-// Default: 60 seconds
-func (c *ListenerConfig) WithReadTimeout(timeout time.Duration) *ListenerConfig {
-	if timeout > 0 {
-		c.readTimeout = timeout
 	}
 	return c
 }
