@@ -425,26 +425,14 @@ func handleRequest(c *Connection, ctx context.Context, request websockets.WireMe
 	case websockets.MessageKindAck:
 		err = nil
 	case websockets.MessageKindSubscribe:
-		// Use subscription controller to validate/modify the subscription
-		err = c.subscriptionController.Subscribe(ctx, c, request.Topic)
-		if err == nil {
-			// Controller approved, perform the actual subscription using the async wrapper
-			err = c.eventBus.Subscribe(ctx, c.asyncSubscriber, request.Topic)
-		}
+		// Subscription controller handles validation and EventBus calls
+		err = c.subscriptionController.Subscribe(ctx, c.eventBus, c.asyncSubscriber, request.Topic)
 	case websockets.MessageKindUnsubscribe:
-		// Use subscription controller to validate/modify the unsubscription
-		err = c.subscriptionController.Unsubscribe(ctx, c, request.Topic)
-		if err == nil {
-			// Controller approved, perform the actual unsubscription using the async wrapper
-			err = c.eventBus.Unsubscribe(ctx, c.asyncSubscriber, request.Topic)
-		}
+		// Subscription controller handles validation and EventBus calls
+		err = c.subscriptionController.Unsubscribe(ctx, c.eventBus, c.asyncSubscriber, request.Topic)
 	case websockets.MessageKindUnsubscribeAll:
-		// Use subscription controller to validate the unsubscribe all operation
-		err = c.subscriptionController.UnsubscribeAll(ctx, c)
-		if err == nil {
-			// Controller approved, perform the actual unsubscribe all using the async wrapper
-			err = c.eventBus.UnsubscribeAll(ctx, c.asyncSubscriber)
-		}
+		// Subscription controller handles validation and EventBus calls
+		err = c.subscriptionController.UnsubscribeAll(ctx, c.eventBus, c.asyncSubscriber)
 	default:
 		err = fmt.Errorf("unsupported request type: %s", request.Kind)
 	}

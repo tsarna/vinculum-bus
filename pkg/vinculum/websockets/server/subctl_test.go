@@ -20,57 +20,56 @@ func TestSubscriptionControllers(t *testing.T) {
 		assert.NotNil(t, config.subscriptionController)
 
 		// Test that we can create the default controller
-		controller := config.subscriptionController(eventBus, logger)
+		controller := config.subscriptionController(logger)
 		assert.NotNil(t, controller)
 
 		// Test PassthroughSubscriptionController behavior
 		ctx := context.Background()
 		mockSubscriber := &mockSubscriber{}
 
-		err := controller.Subscribe(ctx, mockSubscriber, "test/topic")
+		err := controller.Subscribe(ctx, eventBus, mockSubscriber, "test/topic")
 		assert.NoError(t, err) // Should allow all subscriptions
 
-		err = controller.Unsubscribe(ctx, mockSubscriber, "test/topic")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "test/topic")
 		assert.NoError(t, err) // Should allow all unsubscriptions
 
 		// Test custom subscription controller factory
 		customControllerCalled := false
-		customFactory := func(eb vinculum.EventBus, log *zap.Logger) SubscriptionController {
+		customFactory := func(log *zap.Logger) SubscriptionController {
 			customControllerCalled = true
-			assert.Equal(t, eventBus, eb)
 			assert.Equal(t, logger, log)
 			return &testSubscriptionController{}
 		}
 
 		config.WithSubscriptionController(customFactory)
-		controller = config.subscriptionController(eventBus, logger)
+		controller = config.subscriptionController(logger)
 		assert.True(t, customControllerCalled)
 		assert.IsType(t, &testSubscriptionController{}, controller)
 	})
 
 	t.Run("PassthroughSubscriptionController", func(t *testing.T) {
-		controller := NewPassthroughSubscriptionController(eventBus, logger)
+		controller := NewPassthroughSubscriptionController(logger)
 		ctx := context.Background()
 		mockSubscriber := &mockSubscriber{}
 
 		// Should allow any subscription
-		err := controller.Subscribe(ctx, mockSubscriber, "any/topic/pattern")
+		err := controller.Subscribe(ctx, eventBus, mockSubscriber, "any/topic/pattern")
 		assert.NoError(t, err)
 
-		err = controller.Subscribe(ctx, mockSubscriber, "sensor/+/data")
+		err = controller.Subscribe(ctx, eventBus, mockSubscriber, "sensor/+/data")
 		assert.NoError(t, err)
 
-		err = controller.Subscribe(ctx, mockSubscriber, "events/#")
+		err = controller.Subscribe(ctx, eventBus, mockSubscriber, "events/#")
 		assert.NoError(t, err)
 
 		// Should allow any unsubscription
-		err = controller.Unsubscribe(ctx, mockSubscriber, "any/topic/pattern")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "any/topic/pattern")
 		assert.NoError(t, err)
 
-		err = controller.Unsubscribe(ctx, mockSubscriber, "sensor/+/data")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "sensor/+/data")
 		assert.NoError(t, err)
 
-		err = controller.Unsubscribe(ctx, mockSubscriber, "events/#")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "events/#")
 		assert.NoError(t, err)
 	})
 
@@ -80,31 +79,31 @@ func TestSubscriptionControllers(t *testing.T) {
 		mockSubscriber := &mockSubscriber{}
 
 		// Should allow normal subscriptions
-		err := controller.Subscribe(ctx, mockSubscriber, "allowed/topic")
+		err := controller.Subscribe(ctx, eventBus, mockSubscriber, "allowed/topic")
 		assert.NoError(t, err)
 		assert.True(t, controller.subscribeCalled)
 
 		// Should deny specific topics
 		controller.subscribeCalled = false
-		err = controller.Subscribe(ctx, mockSubscriber, "denied/topic")
+		err = controller.Subscribe(ctx, eventBus, mockSubscriber, "denied/topic")
 		assert.Error(t, err)
 		assert.True(t, controller.subscribeCalled)
 		assert.Contains(t, err.Error(), "subscription denied")
 
 		// Should allow normal unsubscriptions
-		err = controller.Unsubscribe(ctx, mockSubscriber, "allowed/topic")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "allowed/topic")
 		assert.NoError(t, err)
 		assert.True(t, controller.unsubscribeCalled)
 
 		// Should deny specific unsubscriptions
 		controller.unsubscribeCalled = false
-		err = controller.Unsubscribe(ctx, mockSubscriber, "denied/topic")
+		err = controller.Unsubscribe(ctx, eventBus, mockSubscriber, "denied/topic")
 		assert.Error(t, err)
 		assert.True(t, controller.unsubscribeCalled)
 		assert.Contains(t, err.Error(), "unsubscription denied")
 
 		// Should allow unsubscribe all
-		err = controller.UnsubscribeAll(ctx, mockSubscriber)
+		err = controller.UnsubscribeAll(ctx, eventBus, mockSubscriber)
 		assert.NoError(t, err)
 		assert.True(t, controller.unsubscribeAllCalled)
 	})
@@ -143,25 +142,28 @@ type testSubscriptionController struct {
 	unsubscribeAllCalled bool
 }
 
-func (t *testSubscriptionController) Subscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *testSubscriptionController) Subscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
 	t.subscribeCalled = true
 	if topicPattern == "denied/topic" {
 		return fmt.Errorf("subscription denied")
 	}
-	return nil
+	// Make the actual EventBus call for allowed subscriptions
+	return eventBus.Subscribe(ctx, subscriber, topicPattern)
 }
 
-func (t *testSubscriptionController) Unsubscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *testSubscriptionController) Unsubscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
 	t.unsubscribeCalled = true
 	if topicPattern == "denied/topic" {
 		return fmt.Errorf("unsubscription denied")
 	}
-	return nil
+	// Make the actual EventBus call for allowed unsubscriptions
+	return eventBus.Unsubscribe(ctx, subscriber, topicPattern)
 }
 
-func (t *testSubscriptionController) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+func (t *testSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber) error {
 	t.unsubscribeAllCalled = true
-	return nil
+	// Make the actual EventBus call
+	return eventBus.UnsubscribeAll(ctx, subscriber)
 }
 
 // mockEventBus implements vinculum.EventBus for testing

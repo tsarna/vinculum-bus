@@ -1,10 +1,14 @@
 # Vinculum
 
-A high-performance, feature-rich in-process EventBus for Go with MQTT-style topic patterns, and optional observability.
-
 "The [vinculum is the] processing device at the core of every Borg vessel.
 It interconnects the minds of all the drones."
    -- Seven of Nine (In Voyager episode "Infinite Regress")
+
+Vinculum is several things:
+
+- A high-performance, feature-rich in-process EventBus for Go with MQTT-style topic patterns, and optional observability.
+- An optional, simple, JSON-based protocol with a server implementation to expose the bus over WebSockets. This is a good way for a web application to automatically notify clients of updates based on actions taken by other clients, for example.
+- A client implementation of the protocol
 
 Note that this README was written almost entirely by Claude and it makes bold claims, but it did actually test the performance and got the claimed numbers on a 2021 M1 Max MacBook.
 

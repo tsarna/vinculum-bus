@@ -39,7 +39,7 @@ func newListener(config *ListenerConfig) *Listener {
 		eventBus:               config.eventBus,
 		logger:                 config.logger,
 		config:                 config,
-		subscriptionController: config.subscriptionController(config.eventBus, config.logger),
+		subscriptionController: config.subscriptionController(config.logger),
 		connections:            make(map[*Connection]struct{}),
 		shutdown:               make(chan struct{}),
 	}
