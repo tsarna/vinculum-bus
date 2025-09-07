@@ -22,7 +22,10 @@ func (n *NoOpSubscriber) OnEvent(ctx context.Context, topic string, message any,
 
 func BenchmarkPublishNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -40,7 +43,10 @@ func BenchmarkPublishNoObservability(b *testing.B) {
 
 func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -54,11 +60,14 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	defer metricsProvider.Stop()
 
 	// Create observable EventBus with standalone metrics
-	observableEventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
-		MetricsProvider: metricsProvider,
-		ServiceName:     "benchmark",
-		ServiceVersion:  "v1.0.0",
-	})
+	observableEventBus, err := vinculum.NewEventBus().
+		WithLogger(logger).
+		WithMetrics(metricsProvider).
+		WithServiceInfo("benchmark", "v1.0.0").
+		Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 
 	observableEventBus.Start()
 	defer observableEventBus.Stop()
@@ -82,12 +91,14 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 	otelProvider := otel.NewProvider("benchmark", "v1.0.0")
 
 	// Create observable EventBus with OpenTelemetry
-	observableEventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
-		MetricsProvider: otelProvider,
-		TracingProvider: otelProvider,
-		ServiceName:     "benchmark",
-		ServiceVersion:  "v1.0.0",
-	})
+	observableEventBus, err := vinculum.NewEventBus().
+		WithLogger(logger).
+		WithObservability(otelProvider, otelProvider).
+		WithServiceInfo("benchmark", "v1.0.0").
+		Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 
 	observableEventBus.Start()
 	defer observableEventBus.Stop()
@@ -106,7 +117,10 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 
 func BenchmarkPublishSyncNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -124,7 +138,10 @@ func BenchmarkPublishSyncNoObservability(b *testing.B) {
 
 func BenchmarkThroughput(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		b.Fatalf("Build() returned error: %v", err)
+	}
 	eventBus.Start()
 	defer eventBus.Stop()
 

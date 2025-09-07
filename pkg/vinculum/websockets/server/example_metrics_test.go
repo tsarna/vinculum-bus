@@ -19,9 +19,13 @@ func ExampleWebSocketMetrics() {
 	defer logger.Sync()
 
 	// Create an EventBus (using the default implementation)
-	eventBus := vinculum.NewEventBusWithConfig(logger, &vinculum.EventBusConfig{
-		BufferSize: 1000,
-	})
+	eventBus, err := vinculum.NewEventBus().
+		WithLogger(logger).
+		WithBufferSize(1000).
+		Build()
+	if err != nil {
+		log.Fatalf("Build() returned error: %v", err)
+	}
 	defer eventBus.Stop()
 
 	// Start the EventBus
@@ -43,7 +47,7 @@ func ExampleWebSocketMetrics() {
 	defer metricsProvider.Stop()
 
 	// Create the WebSocket listener with metrics
-	listener, err := server.NewListenerConfig().
+	listener, err := server.NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger).
 		WithMetricsProvider(metricsProvider).
@@ -136,9 +140,13 @@ func ExampleMetricsWithCustomProvider() {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	eventBus := vinculum.NewEventBusWithConfig(logger, &vinculum.EventBusConfig{
-		BufferSize: 1000,
-	})
+	eventBus, err := vinculum.NewEventBus().
+		WithLogger(logger).
+		WithBufferSize(1000).
+		Build()
+	if err != nil {
+		log.Fatalf("Build() returned error: %v", err)
+	}
 	defer eventBus.Stop()
 
 	if err := eventBus.Start(); err != nil {
@@ -149,7 +157,7 @@ func ExampleMetricsWithCustomProvider() {
 	metricsProvider := &loggingMetricsProvider{logger: logger}
 
 	// Create WebSocket listener
-	listener, err := server.NewListenerConfig().
+	listener, err := server.NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger).
 		WithMetricsProvider(metricsProvider).
@@ -178,9 +186,13 @@ func ExampleMetricsDisabled() {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	eventBus := vinculum.NewEventBusWithConfig(logger, &vinculum.EventBusConfig{
-		BufferSize: 1000,
-	})
+	eventBus, err := vinculum.NewEventBus().
+		WithLogger(logger).
+		WithBufferSize(1000).
+		Build()
+	if err != nil {
+		log.Fatalf("Build() returned error: %v", err)
+	}
 	defer eventBus.Stop()
 
 	if err := eventBus.Start(); err != nil {
@@ -188,7 +200,7 @@ func ExampleMetricsDisabled() {
 	}
 
 	// Create WebSocket listener without metrics provider
-	listener, err := server.NewListenerConfig().
+	listener, err := server.NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger).
 		// No WithMetricsProvider() call - metrics will be disabled

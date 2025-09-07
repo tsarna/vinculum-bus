@@ -3,6 +3,7 @@ package vinculum
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,29 +97,345 @@ func (m *MockSubscriber) Reset() {
 	m.events = m.events[:0]
 }
 
+// Mock implementations for testing observability
+type mockMetricsProvider struct{}
+
+func (m *mockMetricsProvider) Counter(name string) Counter     { return &mockCounter{} }
+func (m *mockMetricsProvider) Histogram(name string) Histogram { return &mockHistogram{} }
+func (m *mockMetricsProvider) Gauge(name string) Gauge         { return &mockGauge{} }
+
+type mockCounter struct{}
+
+func (m *mockCounter) Add(ctx context.Context, value int64, labels ...Label) {}
+
+type mockHistogram struct{}
+
+func (m *mockHistogram) Record(ctx context.Context, value float64, labels ...Label) {}
+
+type mockGauge struct{}
+
+func (m *mockGauge) Set(ctx context.Context, value float64, labels ...Label) {}
+
+type mockTracingProvider struct{}
+
+func (m *mockTracingProvider) StartSpan(ctx context.Context, name string) (context.Context, Span) {
+	return ctx, &mockSpan{}
+}
+
+type mockSpan struct{}
+
+func (m *mockSpan) SetAttributes(labels ...Label)                     {}
+func (m *mockSpan) SetStatus(code SpanStatusCode, description string) {}
+func (m *mockSpan) End()                                              {}
+
 func TestNewEventBus(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBusInstance := NewEventBus(logger)
+	eventBusInstance, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 	if eventBusInstance == nil {
-		t.Fatal("NewEventBus returned nil")
+		t.Fatal("Builder returned nil")
 	}
 
 	// Verify the event bus is not started initially
 	b, ok := eventBusInstance.(*basicEventBus)
 	if !ok {
-		t.Fatal("NewEventBus should return *basicEventBus type")
+		t.Fatal("Builder should return *basicEventBus type")
 	}
 	if atomic.LoadInt32(&b.started) != 0 {
 		t.Error("EventBus should not be started initially")
 	}
 }
 
+func TestEventBusBuilder_Basic(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	eventBus, err := NewEventBus().
+		WithLogger(logger).
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	if eventBus == nil {
+		t.Fatal("Builder returned nil")
+	}
+
+	// Verify the event bus is not started initially
+	b, ok := eventBus.(*basicEventBus)
+	if !ok {
+		t.Fatal("Builder should return *basicEventBus type")
+	}
+	if atomic.LoadInt32(&b.started) != 0 {
+		t.Error("EventBus should not be started initially")
+	}
+
+	// Verify default buffer size
+	if cap(b.ch) != 1000 {
+		t.Errorf("Expected default buffer size 1000, got %d", cap(b.ch))
+	}
+}
+
+func TestEventBusBuilder_WithBufferSize(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	eventBus, err := NewEventBus().
+		WithLogger(logger).
+		WithBufferSize(500).
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	b := eventBus.(*basicEventBus)
+	if cap(b.ch) != 500 {
+		t.Errorf("Expected buffer size 500, got %d", cap(b.ch))
+	}
+}
+
+func TestEventBusBuilder_WithObservability(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	mockMetrics := &mockMetricsProvider{}
+	mockTracing := &mockTracingProvider{}
+
+	eventBus, err := NewEventBus().
+		WithLogger(logger).
+		WithObservability(mockMetrics, mockTracing).
+		WithServiceInfo("test-service", "1.0.0").
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	b := eventBus.(*basicEventBus)
+	if b.metricsProvider != mockMetrics {
+		t.Error("Expected metrics provider to be set")
+	}
+	if b.tracingProvider != mockTracing {
+		t.Error("Expected tracing provider to be set")
+	}
+}
+
+func TestEventBusBuilder_WithMetricsAndTracing(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	mockMetrics := &mockMetricsProvider{}
+	mockTracing := &mockTracingProvider{}
+
+	eventBus, err := NewEventBus().
+		WithLogger(logger).
+		WithMetrics(mockMetrics).
+		WithTracing(mockTracing).
+		Build()
+
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	b := eventBus.(*basicEventBus)
+	if b.metricsProvider != mockMetrics {
+		t.Error("Expected metrics provider to be set")
+	}
+	if b.tracingProvider != mockTracing {
+		t.Error("Expected tracing provider to be set")
+	}
+}
+
+func TestEventBusBuilder_BuildWithoutLogger(t *testing.T) {
+	// Should not return error and should use nop logger
+	eventBus, err := NewEventBus().Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	if eventBus == nil {
+		t.Error("Expected EventBus instance but got nil")
+	}
+
+	// Verify it uses nop logger by checking the internal structure
+	b, ok := eventBus.(*basicEventBus)
+	if !ok {
+		t.Fatal("Expected *basicEventBus type")
+	}
+	if b.logger == nil {
+		t.Error("Expected logger to be set (should be nop logger)")
+	}
+}
+
+func TestEventBusBuilder_FluentInterface(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	// Test that all methods return the builder for chaining
+	builder := NewEventBus()
+
+	result1 := builder.WithLogger(logger)
+	if result1 != builder {
+		t.Error("WithLogger should return the same builder instance")
+	}
+
+	result2 := builder.WithBufferSize(200)
+	if result2 != builder {
+		t.Error("WithBufferSize should return the same builder instance")
+	}
+
+	mockMetrics := &mockMetricsProvider{}
+	result3 := builder.WithMetrics(mockMetrics)
+	if result3 != builder {
+		t.Error("WithMetrics should return the same builder instance")
+	}
+
+	mockTracing := &mockTracingProvider{}
+	result4 := builder.WithTracing(mockTracing)
+	if result4 != builder {
+		t.Error("WithTracing should return the same builder instance")
+	}
+
+	result5 := builder.WithServiceInfo("test", "1.0")
+	if result5 != builder {
+		t.Error("WithServiceInfo should return the same builder instance")
+	}
+}
+
+func TestEventBusBuilder_IsValid(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupBuilder  func() *EventBusBuilder
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid configuration",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().WithLogger(zaptest.NewLogger(t))
+			},
+			expectError: false,
+		},
+		{
+			name: "missing logger is valid (uses nop logger)",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus()
+			},
+			expectError: false,
+		},
+		{
+			name: "zero buffer size",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithBufferSize(0)
+			},
+			expectError:   true,
+			errorContains: "buffer size must be positive",
+		},
+		{
+			name: "negative buffer size",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithBufferSize(-100)
+			},
+			expectError:   true,
+			errorContains: "buffer size must be positive",
+		},
+		{
+			name: "service name without version",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithServiceInfo("my-service", "")
+			},
+			expectError:   true,
+			errorContains: "both service name and version must be provided together",
+		},
+		{
+			name: "service version without name",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithServiceInfo("", "1.0.0")
+			},
+			expectError:   true,
+			errorContains: "both service name and version must be provided together",
+		},
+		{
+			name: "valid service info",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithServiceInfo("my-service", "1.0.0")
+			},
+			expectError: false,
+		},
+		{
+			name: "empty service info is valid",
+			setupBuilder: func() *EventBusBuilder {
+				return NewEventBus().
+					WithLogger(zaptest.NewLogger(t)).
+					WithServiceInfo("", "")
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := tt.setupBuilder()
+			err := builder.IsValid()
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected validation error but got none")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("Expected error to contain '%s', got: %s", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no validation error but got: %s", err.Error())
+				}
+			}
+		})
+	}
+}
+
+func TestEventBusBuilder_Build_WithErrors(t *testing.T) {
+	t.Run("valid configuration", func(t *testing.T) {
+		logger := zaptest.NewLogger(t)
+		eventBus, err := NewEventBus().
+			WithLogger(logger).
+			Build()
+
+		if err != nil {
+			t.Errorf("Expected no error but got: %s", err.Error())
+		}
+		if eventBus == nil {
+			t.Error("Expected EventBus instance but got nil")
+		}
+	})
+
+	t.Run("invalid configuration", func(t *testing.T) {
+		eventBus, err := NewEventBus().
+			WithBufferSize(-1).
+			Build()
+
+		if err == nil {
+			t.Error("Expected validation error but got none")
+		}
+		if eventBus != nil {
+			t.Error("Expected nil EventBus but got instance")
+		}
+	})
+}
+
 func TestEventBusStartStop(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 
 	// Test starting the event bus
-	err := eventBus.Start()
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -147,8 +464,11 @@ func TestEventBusStartStop(t *testing.T) {
 
 func TestEventBusSubscribeUnsubscribe(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -181,8 +501,11 @@ func TestEventBusSubscribeUnsubscribe(t *testing.T) {
 
 func TestEventBusUnsubscribeAll(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -218,8 +541,11 @@ func TestEventBusUnsubscribeAll(t *testing.T) {
 
 func TestEventBusPublishEvent(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -257,8 +583,11 @@ func TestEventBusPublishEvent(t *testing.T) {
 
 func TestEventBusExactTopicMatching(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -292,8 +621,11 @@ func TestEventBusExactTopicMatching(t *testing.T) {
 
 func TestEventBusWildcardMatching(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -324,8 +656,11 @@ func TestEventBusWildcardMatching(t *testing.T) {
 
 func TestEventBusMultilevelWildcardMatching(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -356,8 +691,11 @@ func TestEventBusMultilevelWildcardMatching(t *testing.T) {
 
 func TestEventBusParameterExtraction(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -398,8 +736,11 @@ func TestEventBusParameterExtraction(t *testing.T) {
 
 func TestEventBusMultipleSubscribers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -436,8 +777,11 @@ func TestEventBusMultipleSubscribers(t *testing.T) {
 
 func TestEventBusMultipleMatchingPatterns(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -480,7 +824,10 @@ func TestEventBusMultipleMatchingPatterns(t *testing.T) {
 
 func TestEventBusMessageBeforeStart(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 	subscriber := NewMockSubscriber()
 
 	// Try to subscribe before starting event bus
@@ -507,8 +854,11 @@ func TestEventBusMessageBeforeStart(t *testing.T) {
 
 func TestEventBusConcurrentOperations(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -553,8 +903,11 @@ func TestEventBusConcurrentOperations(t *testing.T) {
 func TestEventBusChannelBuffer(t *testing.T) {
 	// Create a event bus and start it
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -601,9 +954,18 @@ func TestEventBusConfigurableBuffer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := zaptest.NewLogger(t)
 
-			// Test with EventBusConfig
-			config := &EventBusConfig{BufferSize: tt.bufferSize}
-			eventBus := NewEventBusWithConfig(logger, config)
+			// Test with builder pattern
+			builder := NewEventBus().WithLogger(logger)
+
+			// Only set buffer size if it's positive (builder validates this)
+			if tt.bufferSize > 0 {
+				builder = builder.WithBufferSize(tt.bufferSize)
+			}
+
+			eventBus, err := builder.Build()
+			if err != nil {
+				t.Fatalf("Build() returned error: %v", err)
+			}
 			eventBus.Start()
 			defer eventBus.Stop()
 
@@ -633,12 +995,12 @@ func TestEventBusConfigurableBuffer(t *testing.T) {
 func TestEventBusObservabilityConfigurableBuffer(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
-	// Test with ObservabilityConfig
-	config := &ObservabilityConfig{
-		BufferSize:  500,
-		ServiceName: "test-service",
+	// Test with builder pattern for observability buffer size
+	bufferSize := 500
+	eventBus, err := NewEventBus().WithLogger(logger).WithBufferSize(bufferSize).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
 	}
-	eventBus := NewEventBusWithObservability(logger, config)
 	eventBus.Start()
 	defer eventBus.Stop()
 
@@ -655,7 +1017,7 @@ func TestEventBusObservabilityConfigurableBuffer(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	events := subscriber.GetEvents()
-	t.Logf("Observability buffer 500: Processed %d out of %d messages", len(events), numMessages)
+	t.Logf("Observability buffer %d: Processed %d out of %d messages", bufferSize, len(events), numMessages)
 
 	// Should receive at least some messages
 	if len(events) == 0 {
@@ -665,8 +1027,11 @@ func TestEventBusObservabilityConfigurableBuffer(t *testing.T) {
 
 func TestEventBusStopWithPendingMessages(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -694,10 +1059,13 @@ func TestEventBusStopWithPendingMessages(t *testing.T) {
 
 func TestEventBusContextCancellation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBusInstance := NewEventBus(logger)
+	eventBusInstance, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 	b := eventBusInstance.(*basicEventBus)
 
-	err := eventBusInstance.Start()
+	err = eventBusInstance.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -718,8 +1086,11 @@ func TestEventBusContextCancellation(t *testing.T) {
 
 func TestEventBusAutomaticParameterDetection(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := NewEventBus(logger)
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}
@@ -779,8 +1150,11 @@ func TestEventBusAutomaticParameterDetection(t *testing.T) {
 }
 
 func TestEventBusPublishSync(t *testing.T) {
-	eventBus := NewEventBus(zaptest.NewLogger(t))
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(zaptest.NewLogger(t)).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start EventBus: %v", err)
 	}
@@ -822,8 +1196,11 @@ func TestEventBusPublishSync(t *testing.T) {
 }
 
 func TestEventBusPublishSyncWithError(t *testing.T) {
-	eventBus := NewEventBus(zaptest.NewLogger(t))
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(zaptest.NewLogger(t)).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start EventBus: %v", err)
 	}
@@ -849,11 +1226,14 @@ func TestEventBusPublishSyncWithError(t *testing.T) {
 }
 
 func TestEventBusPublishSyncBeforeStart(t *testing.T) {
-	eventBus := NewEventBus(zaptest.NewLogger(t))
+	eventBus, err := NewEventBus().WithLogger(zaptest.NewLogger(t)).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 	// Don't start the EventBus
 
 	// Test PublishSync on stopped EventBus
-	err := eventBus.PublishSync(context.Background(), "test/topic", "message")
+	err = eventBus.PublishSync(context.Background(), "test/topic", "message")
 	if err == nil {
 		t.Error("PublishSync should return error when EventBus is not started")
 	}
@@ -872,13 +1252,16 @@ func TestEventBusWithObservability(t *testing.T) {
 		gauges:     make(map[string]*testGauge),
 	}
 
-	eventBus := NewEventBusWithObservability(zaptest.NewLogger(t), &ObservabilityConfig{
-		MetricsProvider: metrics,
-		ServiceName:     "test-service",
-		ServiceVersion:  "v1.0.0",
-	})
+	eventBus, err := NewEventBus().
+		WithLogger(zaptest.NewLogger(t)).
+		WithMetrics(metrics).
+		WithServiceInfo("test-service", "v1.0.0").
+		Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 
-	err := eventBus.Start()
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start EventBus: %v", err)
 	}
@@ -987,8 +1370,11 @@ func (s *testMetricsSubscriber) OnEvent(ctx context.Context, topic string, messa
 }
 
 func TestStandaloneMetricsProvider(t *testing.T) {
-	eventBus := NewEventBus(zaptest.NewLogger(t))
-	err := eventBus.Start()
+	eventBus, err := NewEventBus().WithLogger(zaptest.NewLogger(t)).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start EventBus: %v", err)
 	}
@@ -1008,11 +1394,14 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	defer metricsProvider.Stop()
 
 	// Create observable EventBus using the standalone provider
-	observableEventBus := NewEventBusWithObservability(zaptest.NewLogger(t), &ObservabilityConfig{
-		MetricsProvider: metricsProvider,
-		ServiceName:     "test-service",
-		ServiceVersion:  "v1.0.0",
-	})
+	observableEventBus, err := NewEventBus().
+		WithLogger(zaptest.NewLogger(t)).
+		WithMetrics(metricsProvider).
+		WithServiceInfo("test-service", "v1.0.0").
+		Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 
 	err = observableEventBus.Start()
 	if err != nil {

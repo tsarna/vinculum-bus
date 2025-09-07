@@ -42,6 +42,30 @@ Note that this README was written almost entirely by Claude and it makes bold cl
 - **Context propagation** for distributed tracing
 - **Minimal allocations** in hot paths
 
+## 🌐 WebSocket Components
+
+Vinculum includes WebSocket client and server implementations for real-time web communication:
+
+### 📡 **WebSocket Server**
+Expose your EventBus over WebSockets for real-time web applications:
+- **Real-time event streaming** to web clients
+- **Bidirectional communication** (subscribe + publish)
+- **Flexible authentication** and authorization policies
+- **Built-in metrics** and connection management
+- **Message transformations** and filtering
+
+📖 **[WebSocket Server Documentation](pkg/vinculum/websockets/server/README.md)**
+
+### 🔌 **WebSocket Client**
+Connect to Vinculum WebSocket servers from Go applications:
+- **Auto-reconnection** with exponential backoff
+- **Subscription management** and persistence
+- **Thread-safe** operations
+- **Comprehensive error handling**
+- **Builder pattern** for easy configuration
+
+📖 **[WebSocket Client Documentation](pkg/vinculum/websockets/client/README.md)**
+
 ## 🚀 Quick Start
 
 ```go
@@ -58,8 +82,13 @@ func main() {
     logger, _ := zap.NewProduction()
     ctx := context.Background()
     
-    // Create and start EventBus
-    eventBus := vinculum.NewEventBus(logger)
+    // Create and start EventBus using builder pattern
+    eventBus, err := vinculum.NewEventBus().
+        WithLogger(logger).
+        Build()
+    if err != nil {
+        log.Fatal(err)
+    }
     eventBus.Start()
     defer eventBus.Stop()
     
@@ -105,18 +134,57 @@ type Subscriber interface {
 
 ### Creating EventBus
 
+#### Builder Pattern
+
 ```go
 // Basic EventBus
-eventBus := vinculum.NewEventBus(logger)
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    Build()
+if err != nil {
+    return err
+}
+
+// With custom buffer size
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    WithBufferSize(2000).
+    Build()
+if err != nil {
+    return err
+}
 
 // With observability
-eventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
-    MetricsProvider: provider,
-    TracingProvider: provider,
-    ServiceName:     "my-service",
-    ServiceVersion:  "v1.0.0",
-})
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    WithObservability(metricsProvider, tracingProvider).
+    WithServiceInfo("my-service", "v1.0.0").
+    WithBufferSize(1500).
+    Build()
+if err != nil {
+    return err
+}
+
+// Step by step configuration
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    WithMetrics(metricsProvider).
+    WithTracing(tracingProvider).
+    WithBufferSize(500).
+    Build()
+if err != nil {
+    return err
+}
+
+// Without logger (uses nop logger)
+eventBus, err := vinculum.NewEventBus().
+    WithBufferSize(1000).
+    Build()
+if err != nil {
+    return err
+}
 ```
+
 
 ## 🎯 Topic Patterns
 
@@ -145,10 +213,14 @@ eventBus.Publish(ctx, "users/123/orders/456", orderData)
 import "github.com/tsarna/vinculum/pkg/vinculum/otel"
 
 provider := otel.NewProvider("my-service", "v1.0.0")
-eventBus := vinculum.NewEventBusWithObservability(logger, &vinculum.ObservabilityConfig{
-    MetricsProvider: provider,
-    TracingProvider: provider,
-})
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    WithObservability(provider, provider).
+    WithServiceInfo("my-service", "v1.0.0").
+    Build()
+if err != nil {
+    return err
+}
 ```
 
 ### 2. Standalone Metrics (Zero Dependencies)
@@ -253,20 +325,13 @@ Control the internal channel buffer size to handle burst traffic:
 
 ```go
 // Custom buffer size for high-throughput scenarios
-config := &vinculum.EventBusConfig{
-    BufferSize: 5000, // Default is 1000
+eventBus, err := vinculum.NewEventBus().
+    WithLogger(logger).
+    WithBufferSize(5000). // Default is 1000
+    Build()
+if err != nil {
+    return err
 }
-eventBus := vinculum.NewEventBusWithConfig(logger, config)
-```
-
-```go
-// Configure buffer size with observability
-config := &vinculum.ObservabilityConfig{
-    BufferSize:      2000,
-    MetricsProvider: provider,
-    ServiceName:     "my-service",
-}
-eventBus := vinculum.NewEventBusWithObservability(logger, config)
 ```
 
 **Buffer Size Guidelines:**
@@ -306,6 +371,15 @@ signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 eventBus.Stop() // Waits for in-flight messages
 ```
 
+### 📋 **Protocol**
+Both components implement the Vinculum WebSocket Protocol:
+- **JSON-based** with compact message format
+- **MQTT-style** topic patterns
+- **Request/response** correlation
+- **Error handling** and acknowledgments
+
+📖 **[Protocol Specification](pkg/vinculum/websockets/PROTOCOL.md)**
+
 ## 🎯 Use Cases
 
 - **Microservice communication** within a process
@@ -314,6 +388,7 @@ eventBus.Stop() // Waits for in-flight messages
 - **Real-time data processing pipelines**
 - **Plugin systems** with event coordination
 - **Application telemetry** and monitoring
+- **Real-time web applications** with WebSocket integration
 
 ## 📄 License
 

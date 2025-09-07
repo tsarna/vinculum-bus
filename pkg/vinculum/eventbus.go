@@ -88,34 +88,6 @@ type basicEventBus struct {
 	subscriberGauge    Gauge
 }
 
-func NewEventBus(logger *zap.Logger) EventBus {
-	return NewEventBusWithConfig(logger, nil)
-}
-
-func NewEventBusWithConfig(logger *zap.Logger, config *EventBusConfig) EventBus {
-	return NewEventBusWithObservability(logger, &ObservabilityConfig{
-		BufferSize: getBufferSize(config),
-	})
-}
-
-func NewEventBusWithObservability(logger *zap.Logger, obs *ObservabilityConfig) EventBus {
-	bufferSize := getObservabilityBufferSize(obs)
-	ctx, cancel := context.WithCancel(context.Background())
-	eb := &basicEventBus{
-		ch:            make(chan EventBusMessage, bufferSize), // Configurable buffered channel
-		ctx:           ctx,
-		cancel:        cancel,
-		subscriptions: make(map[Subscriber]map[string]matcher),
-		logger:        logger,
-	}
-
-	if obs != nil {
-		eb.setupObservability(obs)
-	}
-
-	return eb
-}
-
 func (b *basicEventBus) setupObservability(config *ObservabilityConfig) {
 	b.metricsProvider = config.MetricsProvider
 	b.tracingProvider = config.TracingProvider
@@ -666,22 +638,6 @@ func (b *basicEventBus) Stop() error {
 
 	b.logger.Info("EventBus stopped")
 	return nil
-}
-
-// getBufferSize returns the buffer size from EventBusConfig, defaulting to 1000
-func getBufferSize(config *EventBusConfig) int {
-	if config != nil && config.BufferSize > 0 {
-		return config.BufferSize
-	}
-	return 1000 // Default buffer size
-}
-
-// getObservabilityBufferSize returns the buffer size from ObservabilityConfig, defaulting to 1000
-func getObservabilityBufferSize(config *ObservabilityConfig) int {
-	if config != nil && config.BufferSize > 0 {
-		return config.BufferSize
-	}
-	return 1000 // Default buffer size
 }
 
 // EventBusses implement the Subscriber interface and can be subscribed to other event busses

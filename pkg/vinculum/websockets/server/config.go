@@ -10,7 +10,7 @@ import (
 )
 
 // ListenerConfig holds the configuration for creating a WebSocket Listener.
-// Use NewListenerConfig() to create a new configuration and chain methods
+// Use NewListener() to create a new configuration and chain methods
 // to set the required parameters before calling Build().
 type ListenerConfig struct {
 	eventBus               vinculum.EventBus
@@ -43,12 +43,12 @@ const (
 	DefaultWriteTimeout = 10 * time.Second
 )
 
-// NewListenerConfig creates a new ListenerConfig for building a WebSocket Listener.
+// NewListener creates a new ListenerConfig for building a WebSocket Listener.
 // Use the fluent methods to set the required EventBus and Logger, then call Build().
 //
 // Example:
 //
-//	listener, err := websockets.NewListenerConfig().
+//	listener, err := websockets.NewListener().
 //	    WithEventBus(eventBus).
 //	    WithLogger(logger).
 //	    WithMetricsProvider(metricsProvider).
@@ -59,7 +59,7 @@ const (
 //	    WithInitialSubscriptions("system/alerts", "server/status").
 //	    WithMessageTransforms(filterSensitive, addTimestamp).
 //	    Build()
-func NewListenerConfig() *ListenerConfig {
+func NewListener() *ListenerConfig {
 	return &ListenerConfig{
 		queueSize:              DefaultQueueSize,
 		pingInterval:           DefaultPingInterval,

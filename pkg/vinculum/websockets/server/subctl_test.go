@@ -16,7 +16,7 @@ func TestSubscriptionControllers(t *testing.T) {
 
 	t.Run("subscription controller configuration", func(t *testing.T) {
 		// Default should be PassthroughSubscriptionController
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.NotNil(t, config.subscriptionController)
 
 		// Test that we can create the default controller

@@ -29,7 +29,7 @@ type Listener struct {
 }
 
 // newListener creates a new WebSocket listener from the provided configuration.
-// This is a private constructor - use NewListenerConfig().Build() instead.
+// This is a private constructor - use NewListener().Build() instead.
 //
 // Parameters:
 //   - config: The validated ListenerConfig containing EventBus and Logger

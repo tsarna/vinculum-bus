@@ -147,9 +147,12 @@ func TestLoggingSubscriberDifferentLogLevels(t *testing.T) {
 
 func TestLoggingSubscriberWithEventBus(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 
-	err := eventBus.Start()
+	err = eventBus.Start()
 	if err != nil {
 		t.Fatalf("Failed to start event bus: %v", err)
 	}

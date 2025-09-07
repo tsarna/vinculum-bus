@@ -14,10 +14,13 @@ import (
 
 func TestListenerConfig_BuilderPattern(t *testing.T) {
 	logger := zap.NewNop()
-	eventBus := vinculum.NewEventBus(logger)
+	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
 
 	t.Run("successful build with all parameters", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			Build()
@@ -29,7 +32,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("fluent interface returns same config", func(t *testing.T) {
-		config := NewListenerConfig()
+		config := NewListener()
 		result1 := config.WithEventBus(eventBus)
 		result2 := result1.WithLogger(logger)
 
@@ -39,7 +42,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("isValid returns error when missing parameters", func(t *testing.T) {
 		// Empty config
-		config := NewListenerConfig()
+		config := NewListener()
 		err := config.IsValid()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "EventBus")
@@ -53,7 +56,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 		assert.NotContains(t, err.Error(), "EventBus")
 
 		// Only Logger
-		config = NewListenerConfig().WithLogger(logger)
+		config = NewListener().WithLogger(logger)
 		err = config.IsValid()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "EventBus")
@@ -66,7 +69,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("build fails with missing EventBus", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithLogger(logger).
 			Build()
 
@@ -76,7 +79,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("build fails with missing Logger", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithEventBus(eventBus).
 			Build()
 
@@ -86,7 +89,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("build fails with missing both parameters", func(t *testing.T) {
-		listener, err := NewListenerConfig().Build()
+		listener, err := NewListener().Build()
 
 		assert.Error(t, err)
 		assert.Nil(t, listener)
@@ -96,7 +99,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("queue size configuration", func(t *testing.T) {
 		// Default queue size
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.Equal(t, DefaultQueueSize, config.queueSize)
 
 		// Custom queue size
@@ -116,7 +119,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("fluent interface with queue size", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithQueueSize(1024).
@@ -129,7 +132,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("ping interval configuration", func(t *testing.T) {
 		// Default ping interval
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.Equal(t, DefaultPingInterval, config.pingInterval)
 
 		// Custom ping interval
@@ -147,7 +150,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("fluent interface with ping interval", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithPingInterval(60 * time.Second).
@@ -159,7 +162,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 	})
 
 	t.Run("complete fluent interface", func(t *testing.T) {
-		listener, err := NewListenerConfig().
+		listener, err := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithQueueSize(512).
@@ -174,7 +177,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("event authorization configuration", func(t *testing.T) {
 		// Default should be DenyAllEvents
-		config := NewListenerConfig()
+		config := NewListener()
 		testMsg := &websockets.WireMessage{Topic: "test/topic", Data: "test message"}
 		modifiedMsg, err := config.eventAuth(context.Background(), testMsg)
 		assert.Error(t, err)
@@ -194,7 +197,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("subscription controller configuration", func(t *testing.T) {
 		// Default should be PassthroughSubscriptionController
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.NotNil(t, config.subscriptionController)
 
 		// Test that we can set different subscription controller factories
@@ -204,7 +207,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("initial subscriptions configuration", func(t *testing.T) {
 		// Default should be no initial subscriptions
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.Empty(t, config.initialSubscriptions)
 
 		// Test setting initial subscriptions
@@ -214,24 +217,24 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 		// Test that the slice is copied (not shared)
 		originalTopics := []string{"topic1", "topic2"}
-		config2 := NewListenerConfig()
+		config2 := NewListener()
 		config2.WithInitialSubscriptions(originalTopics...)
 		originalTopics[0] = "modified"
 		assert.Equal(t, []string{"topic1", "topic2"}, config2.initialSubscriptions)
 
 		// Test empty topics (should not change existing subscriptions)
-		config3 := NewListenerConfig().WithInitialSubscriptions("existing")
+		config3 := NewListener().WithInitialSubscriptions("existing")
 		config3.WithInitialSubscriptions() // Empty call
 		assert.Equal(t, []string{"existing"}, config3.initialSubscriptions)
 
 		// Test overwriting existing subscriptions
-		config4 := NewListenerConfig()
+		config4 := NewListener()
 		config4.WithInitialSubscriptions("first", "second")
 		config4.WithInitialSubscriptions("third", "fourth")
 		assert.Equal(t, []string{"third", "fourth"}, config4.initialSubscriptions)
 
 		// Test fluent interface
-		config5 := NewListenerConfig().
+		config5 := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithInitialSubscriptions("fluent/test")
@@ -243,7 +246,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 
 	t.Run("message transforms configuration", func(t *testing.T) {
 		// Default should be no message transforms
-		config := NewListenerConfig()
+		config := NewListener()
 		assert.Empty(t, config.messageTransforms)
 
 		// Test setting message transforms using new transform package
@@ -258,7 +261,7 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 		assert.Len(t, config.messageTransforms, 2)
 
 		// Test fluent interface
-		config2 := NewListenerConfig().
+		config2 := NewListener().
 			WithEventBus(eventBus).
 			WithLogger(logger).
 			WithMessageTransforms(transform1)

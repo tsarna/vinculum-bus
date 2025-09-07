@@ -5,17 +5,11 @@ import (
 )
 
 // ObservabilityConfig holds optional observability providers
-// EventBusConfig provides configuration options for creating an EventBus
-type EventBusConfig struct {
-	BufferSize int // Channel buffer size (default: 1000)
-}
-
 type ObservabilityConfig struct {
 	MetricsProvider MetricsProvider
 	TracingProvider TracingProvider
 	ServiceName     string
 	ServiceVersion  string
-	BufferSize      int // Channel buffer size (default: 1000)
 }
 
 // MetricsProvider abstracts metrics collection (can be implemented with OpenTelemetry, Prometheus, etc.)

@@ -62,7 +62,7 @@ func TestListenerConfig_WithMetricsProvider(t *testing.T) {
 	eventBus := &testEventBus{}
 	provider := newTestMetricsProvider()
 
-	config := NewListenerConfig().
+	config := NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger).
 		WithMetricsProvider(provider)
@@ -91,7 +91,7 @@ func TestListenerConfig_WithoutMetricsProvider(t *testing.T) {
 	logger := zap.NewNop()
 	eventBus := &testEventBus{}
 
-	config := NewListenerConfig().
+	config := NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger)
 		// No metrics provider set
@@ -113,7 +113,7 @@ func TestListenerConfig_MetricsProviderInExample(t *testing.T) {
 	eventBus := &testEventBus{}
 	metricsProvider := newTestMetricsProvider()
 
-	listener, err := NewListenerConfig().
+	listener, err := NewListener().
 		WithEventBus(eventBus).
 		WithLogger(logger).
 		WithMetricsProvider(metricsProvider).

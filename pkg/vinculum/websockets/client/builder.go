@@ -124,7 +124,7 @@ func (b *ClientBuilder) WithMonitor(monitor vinculum.ClientMonitor) *ClientBuild
 
 // Build creates and returns a new WebSocket client with the configured options.
 func (b *ClientBuilder) Build() (*Client, error) {
-	if err := b.validate(); err != nil {
+	if err := b.IsValid(); err != nil {
 		return nil, err
 	}
 
@@ -142,8 +142,8 @@ func (b *ClientBuilder) Build() (*Client, error) {
 	return client, nil
 }
 
-// validate checks that all required configuration is present.
-func (b *ClientBuilder) validate() error {
+// IsValid checks that all required configuration is present.
+func (b *ClientBuilder) IsValid() error {
 	if b.url == "" {
 		return fmt.Errorf("URL is required")
 	}
