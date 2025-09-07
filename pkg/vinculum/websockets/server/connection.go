@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/tsarna/vinculum/pkg/vinculum"
@@ -24,7 +25,9 @@ type Connection struct {
 	logger                 *zap.Logger
 	config                 *ListenerConfig
 	subscriptionController SubscriptionController
+	metrics                *WebSocketMetrics
 	eventMsg               map[string]any
+	startTime              time.Time
 
 	// Async subscriber wrapper for handling outbound messages and periodic tasks
 	asyncSubscriber *subutils.AsyncQueueingSubscriber
@@ -40,9 +43,10 @@ type Connection struct {
 //   - conn: The WebSocket connection to manage
 //   - config: The ListenerConfig containing EventBus and Logger
 //   - subscriptionController: The SubscriptionController for managing subscriptions
+//   - metrics: The WebSocketMetrics for recording connection metrics
 //
 // Returns a new Connection instance that implements the Subscriber interface.
-func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerConfig, subscriptionController SubscriptionController) *Connection {
+func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerConfig, subscriptionController SubscriptionController, metrics *WebSocketMetrics) *Connection {
 	// Create the base connection
 	baseConnection := &Connection{
 		ctx:                    ctx,
@@ -51,7 +55,9 @@ func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerCo
 		logger:                 config.logger,
 		config:                 config,
 		subscriptionController: subscriptionController,
+		metrics:                metrics,
 		eventMsg:               make(map[string]any), // precreated and reused to avoid allocations
+		startTime:              time.Now(),
 	}
 
 	// Create the subscriber wrapper chain:
@@ -161,10 +167,15 @@ func (c *Connection) messageReader() {
 				zap.String("raw_data", string(data)),
 				zap.Int("data_length", len(data)),
 			)
+			// Record message error
+			c.metrics.RecordMessageError(c.ctx, "parse_error", "unknown")
 			// Send error response if message has an ID
 			c.sendErrorResponse("", "Invalid JSON format")
 			continue
 		}
+
+		// Record received message
+		c.metrics.RecordMessageReceived(c.ctx, len(data), request.Kind)
 
 		c.logger.Debug("Received WebSocket message",
 			zap.String("kind", request.Kind),
@@ -208,6 +219,10 @@ func (c *Connection) sendErrorResponse(id any, errorMsg string) {
 func (c *Connection) cleanup() {
 	c.cleanupOnce.Do(func() {
 		c.logger.Debug("Cleaning up WebSocket connection")
+
+		// Record connection duration
+		duration := time.Since(c.startTime)
+		c.metrics.RecordConnectionEnd(c.ctx, duration)
 
 		// Unsubscribe from EventBus using the async subscriber wrapper
 		err := c.eventBus.UnsubscribeAll(c.ctx, c.asyncSubscriber)
@@ -302,9 +317,11 @@ func (c *Connection) handleTick(ctx context.Context) error {
 	err := c.conn.Ping(pingCtx)
 	if err != nil {
 		c.logger.Error("Failed to send ping", zap.Error(err))
+		c.metrics.RecordPongTimeout(ctx)
 		return err
 	}
 
+	c.metrics.RecordPingSent(ctx)
 	c.logger.Debug("Ping sent successfully")
 	return nil
 }
@@ -316,6 +333,7 @@ func (c *Connection) sendPacket(ctx context.Context, msg any) error {
 			zap.Error(err),
 			zap.Any("payload", msg),
 		)
+		c.metrics.RecordMessageError(ctx, "marshal_error", "outbound")
 		return err
 	}
 
@@ -327,9 +345,16 @@ func (c *Connection) sendPacket(ctx context.Context, msg any) error {
 	err = c.conn.Write(writeCtx, websocket.MessageText, data)
 	if err != nil {
 		c.logger.Error("Failed to send WebSocket message", zap.Error(err))
+		// Check if it's a timeout error
+		if writeCtx.Err() == context.DeadlineExceeded {
+			c.metrics.RecordWriteTimeout(ctx)
+		}
+		c.metrics.RecordMessageError(ctx, "write_error", "outbound")
 		return err
 	}
 
+	// Record successful message send
+	c.metrics.RecordMessageSent(ctx, len(data), "outbound")
 	return nil
 }
 
@@ -393,6 +418,12 @@ func (c *Connection) respondToRequest(ctx context.Context, request websockets.Wi
 
 func handleRequest(c *Connection, ctx context.Context, request websockets.WireMessage) {
 	var err error
+
+	// Record request metrics
+	recordCompletion := c.metrics.RecordRequest(ctx, request.Kind)
+	defer func() {
+		recordCompletion(err)
+	}()
 
 	switch request.Kind {
 	case websockets.MessageKindEvent:

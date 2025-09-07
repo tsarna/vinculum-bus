@@ -15,6 +15,7 @@ import (
 type ListenerConfig struct {
 	eventBus               vinculum.EventBus
 	logger                 *zap.Logger
+	metricsProvider        vinculum.MetricsProvider
 	queueSize              int
 	pingInterval           time.Duration
 	writeTimeout           time.Duration
@@ -50,6 +51,7 @@ const (
 //	listener, err := websockets.NewListenerConfig().
 //	    WithEventBus(eventBus).
 //	    WithLogger(logger).
+//	    WithMetricsProvider(metricsProvider).
 //	    WithQueueSize(512).
 //	    WithPingInterval(45 * time.Second).
 //	    WithEventAuth(AllowTopicPrefix("client/")).
@@ -78,6 +80,16 @@ func (c *ListenerConfig) WithEventBus(eventBus vinculum.EventBus) *ListenerConfi
 // The Logger is required for connection events, errors, and debugging.
 func (c *ListenerConfig) WithLogger(logger *zap.Logger) *ListenerConfig {
 	c.logger = logger
+	return c
+}
+
+// WithMetricsProvider sets the MetricsProvider for the WebSocket Listener.
+// The MetricsProvider is optional and enables collection of WebSocket server metrics
+// such as connection counts, message rates, error rates, and connection durations.
+//
+// If not provided, no metrics will be collected.
+func (c *ListenerConfig) WithMetricsProvider(provider vinculum.MetricsProvider) *ListenerConfig {
+	c.metricsProvider = provider
 	return c
 }
 

@@ -19,6 +19,7 @@ type Listener struct {
 	logger                 *zap.Logger
 	config                 *ListenerConfig
 	subscriptionController SubscriptionController
+	metrics                *WebSocketMetrics
 
 	// Connection tracking for graceful shutdown
 	connections  map[*Connection]struct{}
@@ -40,6 +41,7 @@ func newListener(config *ListenerConfig) *Listener {
 		logger:                 config.logger,
 		config:                 config,
 		subscriptionController: config.subscriptionController(config.logger),
+		metrics:                NewWebSocketMetrics(config.metricsProvider),
 		connections:            make(map[*Connection]struct{}),
 		shutdown:               make(chan struct{}),
 	}
@@ -68,6 +70,7 @@ func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
 			zap.String("remote_addr", r.RemoteAddr),
 			zap.String("user_agent", r.UserAgent()),
 		)
+		l.metrics.RecordConnectionError(r.Context(), "upgrade_failed")
 		return
 	}
 
@@ -86,13 +89,17 @@ func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create and track the connection
-	connection := newConnection(r.Context(), conn, l.config, l.subscriptionController)
+	connection := newConnection(r.Context(), conn, l.config, l.subscriptionController, l.metrics)
 
 	// Add connection to tracking map
 	l.connMutex.Lock()
 	l.connections[connection] = struct{}{}
 	connCount := len(l.connections)
 	l.connMutex.Unlock()
+
+	// Record metrics for new connection
+	l.metrics.RecordConnectionStart(r.Context())
+	l.metrics.RecordConnectionActive(r.Context(), connCount)
 
 	l.logger.Debug("WebSocket connection tracked",
 		zap.String("remote_addr", r.RemoteAddr),
@@ -107,6 +114,9 @@ func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
 	delete(l.connections, connection)
 	connCount = len(l.connections)
 	l.connMutex.Unlock()
+
+	// Update active connection count
+	l.metrics.RecordConnectionActive(r.Context(), connCount)
 
 	l.logger.Debug("WebSocket connection removed from tracking",
 		zap.String("remote_addr", r.RemoteAddr),
