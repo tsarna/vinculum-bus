@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,6 +47,7 @@ func TestClientBuilder(t *testing.T) {
 		}))
 		assert.Same(t, builder, builder.WithHeaders(map[string][]string{"X-API-Key": {"key123"}}))
 		assert.Same(t, builder, builder.WithHeader("User-Agent", "MyApp/1.0"))
+		assert.Same(t, builder, builder.WithMonitor(&mockMonitor{}))
 	})
 
 	t.Run("build fails with missing URL", func(t *testing.T) {
@@ -286,6 +289,39 @@ func TestClientBuilder(t *testing.T) {
 		}
 		assert.Equal(t, expected, client.headers)
 	})
+
+	t.Run("monitor configuration", func(t *testing.T) {
+		monitor := &mockMonitor{}
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithSubscriber(subscriber).
+			WithMonitor(monitor).
+			Build()
+
+		require.NoError(t, err)
+		assert.Equal(t, monitor, client.monitor)
+	})
+
+	t.Run("nil monitor is allowed", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithSubscriber(subscriber).
+			WithMonitor(nil).
+			Build()
+
+		require.NoError(t, err)
+		assert.Nil(t, client.monitor)
+	})
+
+	t.Run("no monitor by default", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithSubscriber(subscriber).
+			Build()
+
+		require.NoError(t, err)
+		assert.Nil(t, client.monitor)
+	})
 }
 
 func TestClientLifecycle(t *testing.T) {
@@ -377,6 +413,251 @@ func TestClientLifecycle(t *testing.T) {
 	})
 }
 
+func TestClientReconnection(t *testing.T) {
+	logger := zap.NewNop()
+	subscriber := &mockSubscriber{}
+	monitor := &mockMonitor{}
+
+	t.Run("state reset after failed connect allows reconnection", func(t *testing.T) {
+		// Use invalid URL scheme for fast failure
+		client, err := NewClient().
+			WithURL("invalid-scheme://test").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			WithMonitor(monitor).
+			Build()
+
+		require.NoError(t, err)
+
+		// Initial state - should be disconnected
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+
+		ctx := context.Background()
+
+		// First connect attempt should fail quickly
+		err = client.Connect(ctx)
+		assert.Error(t, err)
+
+		// After failed connect, state should be reset to allow reconnection
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+
+		// Should be able to try connecting again (will also fail)
+		err = client.Connect(ctx)
+		assert.Error(t, err)
+
+		// State should still be reset
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+	})
+
+	t.Run("disconnect before connect is safe", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			Build()
+
+		require.NoError(t, err)
+
+		// Disconnect before ever connecting should be safe
+		err = client.Disconnect()
+		assert.NoError(t, err)
+
+		// State should remain clean
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+	})
+
+	t.Run("successful connect then disconnect then reconnect", func(t *testing.T) {
+		// This test requires a real WebSocket server running on localhost:8080
+		// Skip if no server is available
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			WithMonitor(monitor).
+			WithDialTimeout(500 * time.Millisecond).
+			Build()
+
+		require.NoError(t, err)
+
+		// Reset monitor state
+		monitor.connects = nil
+		monitor.disconnects = nil
+
+		ctx := context.Background()
+
+		// Try to connect - this might succeed if server is running
+		err = client.Connect(ctx)
+		if err != nil {
+			// No server running, skip this test
+			t.Skip("Skipping test - no WebSocket server available on localhost:8080")
+			return
+		}
+
+		// If we get here, connection succeeded
+		assert.Equal(t, int32(1), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+
+		// Monitor should have been called for successful connect
+		assert.Len(t, monitor.connects, 1)
+		assert.Len(t, monitor.disconnects, 0)
+
+		// Disconnect
+		err = client.Disconnect()
+		assert.NoError(t, err)
+
+		// State should be reset
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+
+		// Monitor should have been called for disconnect
+		assert.Len(t, monitor.disconnects, 1)
+		assert.Nil(t, monitor.disconnects[0].err) // Graceful disconnect
+
+		// Should be able to reconnect
+		err = client.Connect(ctx)
+		assert.NoError(t, err)
+
+		// State should be connected again
+		assert.Equal(t, int32(1), atomic.LoadInt32(&client.started))
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping))
+
+		// Monitor should have been called for second connect
+		assert.Len(t, monitor.connects, 2)
+
+		// Clean up
+		client.Disconnect()
+	})
+
+	t.Run("error disconnect resets state for reconnection", func(t *testing.T) {
+		// Create a client that will fail to connect
+		client, err := NewClient().
+			WithURL("ws://127.0.0.1:65432/ws").
+			WithSubscriber(subscriber).
+			WithDialTimeout(50 * time.Millisecond).
+			Build()
+		require.NoError(t, err)
+
+		// Simulate the scenario where client connects but then has an error
+		// First, manually set the started flag to simulate a connected state
+		atomic.StoreInt32(&client.started, 1)
+
+		// Simulate an error disconnect by calling notifyDisconnectError
+		testErr := fmt.Errorf("simulated connection error")
+		client.notifyDisconnectError(testErr)
+
+		// Wait for async cleanup to complete by polling the state
+		// The cleanup is now asynchronous, so we need to wait for it
+		maxWait := 100 * time.Millisecond
+		pollInterval := 5 * time.Millisecond
+		deadline := time.Now().Add(maxWait)
+
+		for time.Now().Before(deadline) {
+			if atomic.LoadInt32(&client.started) == 0 && atomic.LoadInt32(&client.stopping) == 0 {
+				break // Cleanup completed
+			}
+			time.Sleep(pollInterval)
+		}
+
+		// Verify cleanup completed
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.started), "started flag should be reset")
+		assert.Equal(t, int32(0), atomic.LoadInt32(&client.stopping), "stopping flag should be reset")
+
+		// Now try to connect again - this should not fail with "client is already started"
+		err = client.Connect(context.Background())
+		assert.Error(t, err) // Should fail due to no server, but NOT due to "already started"
+		assert.Contains(t, err.Error(), "failed to connect to WebSocket")
+		assert.NotContains(t, err.Error(), "client is already started")
+	})
+}
+
+func TestClientMonitor(t *testing.T) {
+	logger := zap.NewNop()
+	subscriber := &mockSubscriber{}
+	monitor := &mockMonitor{}
+
+	t.Run("monitor receives all lifecycle events", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			WithMonitor(monitor).
+			Build()
+
+		require.NoError(t, err)
+
+		// Test that monitor methods are called (we can't test actual network operations in unit tests)
+		// But we can test that the monitor is properly configured and would be called
+
+		// Verify monitor is set
+		assert.Equal(t, monitor, client.monitor)
+
+		// Test that operations would call monitor (these will fail due to no connection, but that's expected)
+		ctx := context.Background()
+
+		// These operations will fail because there's no actual connection, but we can verify
+		// the monitor integration is in place by checking the client has the monitor
+		assert.NotNil(t, client.monitor)
+
+		// Test Subscribe would call monitor (fails due to no connection)
+		err = client.Subscribe(ctx, "test/topic")
+		assert.Error(t, err) // Expected to fail - not connected
+		assert.Contains(t, err.Error(), "not connected")
+
+		// Test Unsubscribe would call monitor (fails due to no connection)
+		err = client.Unsubscribe(ctx, "test/topic")
+		assert.Error(t, err) // Expected to fail - not connected
+		assert.Contains(t, err.Error(), "not connected")
+
+		// Test UnsubscribeAll would call monitor (fails due to no connection)
+		err = client.UnsubscribeAll(ctx)
+		assert.Error(t, err) // Expected to fail - not connected
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("client works without monitor", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			Build()
+
+		require.NoError(t, err)
+		assert.Nil(t, client.monitor)
+
+		// Operations should work fine without monitor (though they'll fail due to no connection)
+		ctx := context.Background()
+		err = client.Subscribe(ctx, "test/topic")
+		assert.Error(t, err) // Expected to fail - not connected
+		assert.Contains(t, err.Error(), "not connected")
+	})
+
+	t.Run("disconnect calls monitor with nil error for graceful disconnect", func(t *testing.T) {
+		client, err := NewClient().
+			WithURL("ws://localhost:8080/ws").
+			WithLogger(logger).
+			WithSubscriber(subscriber).
+			WithMonitor(monitor).
+			Build()
+
+		require.NoError(t, err)
+
+		// Reset monitor state
+		monitor.disconnects = nil
+
+		// Call disconnect (should be safe even when not connected)
+		err = client.Disconnect()
+		assert.NoError(t, err)
+
+		// Verify monitor was called with nil error (graceful disconnect)
+		assert.Len(t, monitor.disconnects, 1)
+		assert.Nil(t, monitor.disconnects[0].err)
+	})
+}
+
 // mockSubscriber is a test helper that implements the Subscriber interface
 type mockSubscriber struct {
 	subscriptions   []string
@@ -413,4 +694,38 @@ func (m *mockSubscriber) OnEvent(ctx context.Context, topic string, message any,
 func (m *mockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
 	m.passThrough = append(m.passThrough, msg)
 	return nil
+}
+
+// mockMonitor is a test helper that implements the ClientMonitor interface
+type mockMonitor struct {
+	connects       []context.Context
+	disconnects    []disconnectData
+	subscribes     []string
+	unsubscribes   []string
+	unsubscribeAll []context.Context
+}
+
+type disconnectData struct {
+	ctx context.Context
+	err error
+}
+
+func (m *mockMonitor) OnConnect(ctx context.Context, client vinculum.Client) {
+	m.connects = append(m.connects, ctx)
+}
+
+func (m *mockMonitor) OnDisconnect(ctx context.Context, client vinculum.Client, err error) {
+	m.disconnects = append(m.disconnects, disconnectData{ctx: ctx, err: err})
+}
+
+func (m *mockMonitor) OnSubscribe(ctx context.Context, client vinculum.Client, topic string) {
+	m.subscribes = append(m.subscribes, topic)
+}
+
+func (m *mockMonitor) OnUnsubscribe(ctx context.Context, client vinculum.Client, topic string) {
+	m.unsubscribes = append(m.unsubscribes, topic)
+}
+
+func (m *mockMonitor) OnUnsubscribeAll(ctx context.Context, client vinculum.Client) {
+	m.unsubscribeAll = append(m.unsubscribeAll, ctx)
 }

@@ -21,8 +21,9 @@ type ClientBuilder struct {
 	dialTimeout      time.Duration
 	subscriber       vinculum.Subscriber
 	writeChannelSize int
-	authProvider     AuthorizationProvider // Authorization provider
-	headers          map[string][]string   // Custom HTTP headers for WebSocket handshake
+	authProvider     AuthorizationProvider  // Authorization provider
+	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
+	monitor          vinculum.ClientMonitor // Optional monitor for client events
 }
 
 // NewClient creates a new WebSocket client builder.
@@ -114,6 +115,13 @@ func (b *ClientBuilder) WithHeader(key, value string) *ClientBuilder {
 	return b
 }
 
+// WithMonitor sets an optional monitor that will receive client lifecycle events.
+// The monitor will be called for connect, disconnect, subscribe, unsubscribe, and unsubscribe all events.
+func (b *ClientBuilder) WithMonitor(monitor vinculum.ClientMonitor) *ClientBuilder {
+	b.monitor = monitor
+	return b
+}
+
 // Build creates and returns a new WebSocket client with the configured options.
 func (b *ClientBuilder) Build() (*Client, error) {
 	if err := b.validate(); err != nil {
@@ -128,6 +136,7 @@ func (b *ClientBuilder) Build() (*Client, error) {
 		writeChannelSize: b.writeChannelSize,
 		authProvider:     b.authProvider,
 		headers:          b.headers,
+		monitor:          b.monitor,
 	}
 
 	return client, nil

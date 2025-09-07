@@ -40,6 +40,7 @@ func main() {
         WithSubscriber(subscriber).
         WithWriteChannelSize(200).  // Optional: configure buffer size
         WithAuthorization("Bearer your-token-here").  // Optional: add auth
+        WithMonitor(&MyMonitor{}).  // Optional: add lifecycle monitoring
         Build()
     if err != nil {
         log.Fatal(err)
@@ -72,6 +73,7 @@ func main() {
 - `WithAuthorizationProvider(provider AuthorizationProvider)`: Authorization provider function
 - `WithHeaders(headers map[string][]string)`: Custom HTTP headers for WebSocket handshake
 - `WithHeader(key, value string)`: Single HTTP header for WebSocket handshake (convenience method)
+- `WithMonitor(monitor vinculum.ClientMonitor)`: Optional monitor for client lifecycle events
 
 ## Client Interface
 
@@ -186,6 +188,80 @@ client := client.NewClient().
 **Example Use Cases:**
 - **Static**: API keys, long-lived tokens (use `WithAuthorization()`)
 - **Dynamic**: JWT tokens, OAuth2 access tokens, rotating credentials (use `WithAuthorizationProvider()`)
+
+## Client Monitoring
+
+The client supports optional lifecycle monitoring through the `vinculum.ClientMonitor` interface:
+
+### Monitor Interface
+
+```go
+type ClientMonitor interface {
+    OnConnect(ctx context.Context)
+    OnDisconnect(ctx context.Context, err error)
+    OnSubscribe(ctx context.Context, topic string)
+    OnUnsubscribe(ctx context.Context, topic string)
+    OnUnsubscribeAll(ctx context.Context)
+}
+```
+
+### Examples
+
+```go
+// Implement a custom monitor
+type MyMonitor struct {
+    logger *zap.Logger
+}
+
+func (m *MyMonitor) OnConnect(ctx context.Context) {
+    m.logger.Info("Client connected")
+}
+
+func (m *MyMonitor) OnDisconnect(ctx context.Context, err error) {
+    if err != nil {
+        m.logger.Error("Client disconnected with error", zap.Error(err))
+    } else {
+        m.logger.Info("Client disconnected gracefully")
+    }
+}
+
+func (m *MyMonitor) OnSubscribe(ctx context.Context, topic string) {
+    m.logger.Info("Subscribed to topic", zap.String("topic", topic))
+}
+
+func (m *MyMonitor) OnUnsubscribe(ctx context.Context, topic string) {
+    m.logger.Info("Unsubscribed from topic", zap.String("topic", topic))
+}
+
+func (m *MyMonitor) OnUnsubscribeAll(ctx context.Context) {
+    m.logger.Info("Unsubscribed from all topics")
+}
+
+// Use the monitor
+client, err := client.NewClient().
+    WithURL("ws://localhost:8080/ws").
+    WithSubscriber(subscriber).
+    WithMonitor(&MyMonitor{logger: logger}).
+    Build()
+```
+
+### Event Details
+
+- **OnConnect**: Called after successful WebSocket connection establishment
+- **OnDisconnect**: Called when connection is closed
+  - `err == nil`: Graceful disconnect (via `Disconnect()` method)
+  - `err != nil`: Error-based disconnect (network issues, server errors, etc.)
+- **OnSubscribe**: Called after successful subscription to a topic
+- **OnUnsubscribe**: Called after successful unsubscription from a topic  
+- **OnUnsubscribeAll**: Called after successful unsubscription from all topics
+
+### Use Cases
+
+- **Logging**: Track connection lifecycle and subscription changes
+- **Metrics**: Collect connection and subscription statistics
+- **Alerting**: Monitor for connection failures or unexpected disconnects
+- **Debugging**: Trace client behavior and troubleshoot issues
+- **Health Checks**: Monitor client connectivity status
 
 ## Custom Headers
 

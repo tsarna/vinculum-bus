@@ -24,8 +24,9 @@ type Client struct {
 	dialTimeout      time.Duration
 	subscriber       vinculum.Subscriber
 	writeChannelSize int
-	authProvider     AuthorizationProvider // Authorization provider
-	headers          map[string][]string   // Custom HTTP headers for WebSocket handshake
+	authProvider     AuthorizationProvider  // Authorization provider
+	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
+	monitor          vinculum.ClientMonitor // Optional monitor for client events
 
 	// Connection state
 	conn     *websocket.Conn
@@ -68,6 +69,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	// Parse URL
 	_, err := url.Parse(c.url)
 	if err != nil {
+		// Reset state on URL parsing failure
+		atomic.StoreInt32(&c.started, 0)
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
@@ -90,6 +93,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	if c.authProvider != nil {
 		authValue, err := c.authProvider(dialCtx)
 		if err != nil {
+			// Reset state on authorization failure
+			atomic.StoreInt32(&c.started, 0)
 			return fmt.Errorf("failed to get authorization: %w", err)
 		}
 		if authValue != "" {
@@ -103,6 +108,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	// Connect to WebSocket
 	conn, _, err := websocket.Dial(dialCtx, c.url, dialOptions)
 	if err != nil {
+		// Reset state on connection failure
+		atomic.StoreInt32(&c.started, 0)
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
@@ -111,6 +118,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Unlock()
 
 	c.logger.Info("WebSocket client connected", zap.String("url", c.url))
+
+	// Notify monitor of successful connection
+	if c.monitor != nil {
+		c.monitor.OnConnect(ctx, c)
+	}
 
 	// Start message processing goroutines
 	go c.readLoop()
@@ -127,6 +139,26 @@ func (c *Client) Disconnect() error {
 
 	c.logger.Info("Disconnecting WebSocket client")
 
+	// Use common cleanup logic
+	c.cleanup()
+
+	c.logger.Info("WebSocket client disconnected")
+
+	// Notify monitor of graceful disconnect (no error)
+	if c.monitor != nil {
+		c.monitor.OnDisconnect(context.Background(), c, nil)
+	}
+
+	return nil
+}
+
+// cleanup performs the common cleanup operations for both normal and error disconnections
+func (c *Client) cleanup() {
+	c.cleanupWithStatus(websocket.StatusNormalClosure, "client disconnect")
+}
+
+// cleanupWithStatus performs cleanup with a specific close status
+func (c *Client) cleanupWithStatus(status websocket.StatusCode, reason string) {
 	// Cancel context to signal shutdown
 	if c.cancel != nil {
 		c.cancel()
@@ -135,7 +167,7 @@ func (c *Client) Disconnect() error {
 	// Close connection
 	c.mu.Lock()
 	if c.conn != nil {
-		c.conn.Close(websocket.StatusNormalClosure, "client disconnect")
+		c.conn.Close(status, reason)
 		c.conn = nil
 	}
 	c.mu.Unlock()
@@ -145,11 +177,27 @@ func (c *Client) Disconnect() error {
 		<-c.done
 	}
 
+	// Reset state
 	atomic.StoreInt32(&c.started, 0)
 	atomic.StoreInt32(&c.stopping, 0)
+}
 
-	c.logger.Info("WebSocket client disconnected")
-	return nil
+// notifyDisconnectError notifies the monitor of an error-based disconnection
+// and triggers cleanup to reset the client state for potential reconnection
+func (c *Client) notifyDisconnectError(err error) {
+	// Only trigger cleanup if we're not already stopping
+	if atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
+		// Run cleanup in a separate goroutine to avoid deadlock
+		// (this function is called from readLoop/writeLoop which need to exit first)
+		go func() {
+			c.cleanupWithStatus(websocket.StatusInternalError, "connection error")
+
+			// Notify monitor after cleanup is complete
+			if c.monitor != nil {
+				c.monitor.OnDisconnect(context.Background(), c, err)
+			}
+		}()
+	}
 }
 
 // Client interface implementation
@@ -169,6 +217,11 @@ func (c *Client) Subscribe(ctx context.Context, topic string) error {
 
 	if err := c.sendMessage(ctx, msg); err != nil {
 		return err
+	}
+
+	// Notify monitor of successful subscription
+	if c.monitor != nil {
+		c.monitor.OnSubscribe(ctx, c, topic)
 	}
 
 	// Notify subscriber
@@ -192,6 +245,11 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string) error {
 		return err
 	}
 
+	// Notify monitor of successful unsubscription
+	if c.monitor != nil {
+		c.monitor.OnUnsubscribe(ctx, c, topic)
+	}
+
 	// Notify subscriber
 	return c.subscriber.OnUnsubscribe(ctx, topic)
 }
@@ -208,7 +266,16 @@ func (c *Client) UnsubscribeAll(ctx context.Context) error {
 		Id:   c.nextMessageID(),
 	}
 
-	return c.sendMessage(ctx, msg)
+	if err := c.sendMessage(ctx, msg); err != nil {
+		return err
+	}
+
+	// Notify monitor of successful unsubscribe all
+	if c.monitor != nil {
+		c.monitor.OnUnsubscribeAll(ctx, c)
+	}
+
+	return nil
 }
 
 // Publish implements Client.Publish
@@ -353,6 +420,7 @@ func (c *Client) readLoop() {
 		if err != nil {
 			if c.ctx.Err() == nil {
 				c.logger.Error("Failed to read from WebSocket", zap.Error(err))
+				c.notifyDisconnectError(err)
 			}
 			return
 		}
@@ -379,6 +447,7 @@ func (c *Client) writeLoop() {
 			if err := conn.Write(c.ctx, websocket.MessageText, data); err != nil {
 				if c.ctx.Err() == nil {
 					c.logger.Error("Failed to write to WebSocket", zap.Error(err))
+					c.notifyDisconnectError(err)
 				}
 				return
 			}

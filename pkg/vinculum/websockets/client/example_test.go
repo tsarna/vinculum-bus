@@ -136,6 +136,76 @@ func ExampleClient_withDynamicAuth() {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// ExampleClient_withMonitor demonstrates using a client monitor for lifecycle events.
+func ExampleClient_withMonitor() {
+	logger, _ := zap.NewDevelopment()
+	subscriber := &exampleSubscriber{}
+
+	// Create a monitor to track client lifecycle events
+	monitor := &exampleMonitor{logger: logger}
+
+	// Create client with monitor
+	client, err := NewClient().
+		WithURL("ws://localhost:8080/ws").
+		WithLogger(logger).
+		WithSubscriber(subscriber).
+		WithMonitor(monitor). // Add lifecycle monitoring
+		Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Connect - monitor will receive OnConnect event
+	ctx := context.Background()
+	if err := client.Connect(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	// Subscribe - monitor will receive OnSubscribe events
+	client.Subscribe(ctx, "events/#")
+	client.Subscribe(ctx, "alerts/+")
+
+	// Publish some events
+	client.Publish(ctx, "events/user/login", "user123")
+
+	// Unsubscribe - monitor will receive OnUnsubscribe event
+	client.Unsubscribe(ctx, "alerts/+")
+
+	// Disconnect - monitor will receive OnDisconnect event with nil error (graceful)
+	client.Disconnect()
+
+	time.Sleep(100 * time.Millisecond)
+}
+
+// exampleMonitor implements the ClientMonitor interface for demonstrations.
+type exampleMonitor struct {
+	logger *zap.Logger
+}
+
+func (m *exampleMonitor) OnConnect(ctx context.Context, client vinculum.Client) {
+	m.logger.Info("🔗 Client connected to WebSocket server")
+}
+
+func (m *exampleMonitor) OnDisconnect(ctx context.Context, client vinculum.Client, err error) {
+	if err != nil {
+		m.logger.Error("❌ Client disconnected with error", zap.Error(err))
+	} else {
+		m.logger.Info("✅ Client disconnected gracefully")
+	}
+}
+
+func (m *exampleMonitor) OnSubscribe(ctx context.Context, client vinculum.Client, topic string) {
+	m.logger.Info("📥 Subscribed to topic", zap.String("topic", topic))
+}
+
+func (m *exampleMonitor) OnUnsubscribe(ctx context.Context, client vinculum.Client, topic string) {
+	m.logger.Info("📤 Unsubscribed from topic", zap.String("topic", topic))
+}
+
+func (m *exampleMonitor) OnUnsubscribeAll(ctx context.Context, client vinculum.Client) {
+	m.logger.Info("🗑️ Unsubscribed from all topics")
+}
+
 // exampleSubscriber implements the Subscriber interface for demonstrations.
 type exampleSubscriber struct{}
 
