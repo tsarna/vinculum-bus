@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -55,7 +55,7 @@ func ExampleClient() {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// ExampleClient_asClient demonstrates using the client as a vinculum.Client.
+// ExampleClient_asClient demonstrates using the client as a bus.Client.
 func ExampleClient_asClient() {
 	logger, _ := zap.NewDevelopment()
 
@@ -73,7 +73,7 @@ func ExampleClient_asClient() {
 	}
 
 	// Use Client interface methods
-	var vinculumClient vinculum.Client = client
+	var vinculumClient bus.Client = client
 
 	// Connect to WebSocket
 	ctx := context.Background()
@@ -182,11 +182,11 @@ type exampleMonitor struct {
 	logger *zap.Logger
 }
 
-func (m *exampleMonitor) OnConnect(ctx context.Context, client vinculum.Client) {
+func (m *exampleMonitor) OnConnect(ctx context.Context, client bus.Client) {
 	m.logger.Info("🔗 Client connected to WebSocket server")
 }
 
-func (m *exampleMonitor) OnDisconnect(ctx context.Context, client vinculum.Client, err error) {
+func (m *exampleMonitor) OnDisconnect(ctx context.Context, client bus.Client, err error) {
 	if err != nil {
 		m.logger.Error("❌ Client disconnected with error", zap.Error(err))
 	} else {
@@ -194,15 +194,15 @@ func (m *exampleMonitor) OnDisconnect(ctx context.Context, client vinculum.Clien
 	}
 }
 
-func (m *exampleMonitor) OnSubscribe(ctx context.Context, client vinculum.Client, topic string) {
+func (m *exampleMonitor) OnSubscribe(ctx context.Context, client bus.Client, topic string) {
 	m.logger.Info("📥 Subscribed to topic", zap.String("topic", topic))
 }
 
-func (m *exampleMonitor) OnUnsubscribe(ctx context.Context, client vinculum.Client, topic string) {
+func (m *exampleMonitor) OnUnsubscribe(ctx context.Context, client bus.Client, topic string) {
 	m.logger.Info("📤 Unsubscribed from topic", zap.String("topic", topic))
 }
 
-func (m *exampleMonitor) OnUnsubscribeAll(ctx context.Context, client vinculum.Client) {
+func (m *exampleMonitor) OnUnsubscribeAll(ctx context.Context, client bus.Client) {
 	m.logger.Info("🗑️ Unsubscribed from all topics")
 }
 
@@ -224,7 +224,7 @@ func (s *exampleSubscriber) OnEvent(ctx context.Context, topic string, message a
 	return nil
 }
 
-func (s *exampleSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (s *exampleSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	fmt.Printf("PassThrough: %s -> %v\n", msg.Topic, msg.Payload)
 	return nil
 }

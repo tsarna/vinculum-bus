@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -19,11 +19,11 @@ type ClientBuilder struct {
 	url              string
 	logger           *zap.Logger
 	dialTimeout      time.Duration
-	subscriber       vinculum.Subscriber
+	subscriber       bus.Subscriber
 	writeChannelSize int
 	authProvider     AuthorizationProvider  // Authorization provider
 	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
-	monitor          vinculum.ClientMonitor // Optional monitor for client events
+	monitor          bus.ClientMonitor // Optional monitor for client events
 }
 
 // NewClient creates a new WebSocket client builder.
@@ -58,7 +58,7 @@ func (b *ClientBuilder) WithDialTimeout(timeout time.Duration) *ClientBuilder {
 }
 
 // WithSubscriber sets the subscriber that will receive events from the client.
-func (b *ClientBuilder) WithSubscriber(subscriber vinculum.Subscriber) *ClientBuilder {
+func (b *ClientBuilder) WithSubscriber(subscriber bus.Subscriber) *ClientBuilder {
 	b.subscriber = subscriber
 	return b
 }
@@ -117,7 +117,7 @@ func (b *ClientBuilder) WithHeader(key, value string) *ClientBuilder {
 
 // WithMonitor sets an optional monitor that will receive client lifecycle events.
 // The monitor will be called for connect, disconnect, subscribe, unsubscribe, and unsubscribe all events.
-func (b *ClientBuilder) WithMonitor(monitor vinculum.ClientMonitor) *ClientBuilder {
+func (b *ClientBuilder) WithMonitor(monitor bus.ClientMonitor) *ClientBuilder {
 	b.monitor = monitor
 	return b
 }

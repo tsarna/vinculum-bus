@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 )
 
 func TestDiffTransform(t *testing.T) {
@@ -22,7 +22,7 @@ func TestDiffTransform(t *testing.T) {
 			"city": "Boston",
 		}
 
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "user/update",
 			Payload: map[string]any{
 				"old": oldValue,
@@ -70,7 +70,7 @@ func TestDiffTransform(t *testing.T) {
 			"status": "inactive",
 		}
 
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "user/complex-update",
 			Payload: map[string]any{
 				"old": oldValue,
@@ -97,7 +97,7 @@ func TestDiffTransform(t *testing.T) {
 			"city": "NYC",
 		}
 
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "user/no-change",
 			Payload: map[string]any{
 				"old": sameValue,
@@ -117,7 +117,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("pass through when payload is not a map", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic:   "test/topic",
 			Payload: "not a map",
 		}
@@ -129,7 +129,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("extended diff with additional metadata", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "user/audit",
 			Payload: map[string]any{
 				"old": map[string]any{
@@ -193,7 +193,7 @@ func TestDiffTransform(t *testing.T) {
 		}
 
 		for i, payload := range testCases {
-			msg := &vinculum.EventBusMessage{
+			msg := &bus.EventBusMessage{
 				Topic:   "test/topic",
 				Payload: payload,
 			}
@@ -205,7 +205,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("pass through when only one key present", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "test/topic",
 			Payload: map[string]any{
 				"old": "value1",
@@ -218,7 +218,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("handle different data types in old/new", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "test/mixed-types",
 			Payload: map[string]any{
 				"old": map[string]any{"count": 5, "enabled": true},
@@ -237,7 +237,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("handle arrays in old/new values - now works without panic", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "test/arrays",
 			Payload: map[string]any{
 				"old": map[string]any{"items": []string{"a", "b", "c"}},
@@ -258,7 +258,7 @@ func TestDiffTransform(t *testing.T) {
 	t.Run("extended diff with no changes", func(t *testing.T) {
 		sameValue := map[string]any{"name": "John", "age": 30}
 
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "user/no-change",
 			Payload: map[string]any{
 				"old":       sameValue,
@@ -291,7 +291,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("extended diff preserves complex metadata", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "complex/audit",
 			Payload: map[string]any{
 				"old": map[string]any{"value": 1},
@@ -341,7 +341,7 @@ func TestDiffTransform(t *testing.T) {
 	})
 
 	t.Run("preserve message context and topic", func(t *testing.T) {
-		msg := &vinculum.EventBusMessage{
+		msg := &bus.EventBusMessage{
 			Topic: "preserve/test",
 			Payload: map[string]any{
 				"old": map[string]any{"value": 1},

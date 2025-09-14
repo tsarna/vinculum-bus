@@ -1,8 +1,14 @@
-package vinculum
+package o11y
 
 import (
 	"context"
 )
+
+// MetricsPublisher defines the minimal interface needed by StandaloneMetricsProvider
+// to publish metrics events. This avoids circular dependencies with the bus package.
+type MetricsPublisher interface {
+	Publish(ctx context.Context, topic string, message any) error
+}
 
 // ObservabilityConfig holds optional observability providers
 type ObservabilityConfig struct {

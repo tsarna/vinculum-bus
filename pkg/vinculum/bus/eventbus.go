@@ -1,4 +1,4 @@
-package vinculum
+package bus
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/amir-yaghoubi/mqttpattern"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"go.uber.org/zap"
 )
 
@@ -73,22 +74,23 @@ type basicEventBus struct {
 	started       int32 // Atomic boolean (0 = false, 1 = true)
 	subscriptions map[Subscriber]map[string]matcher
 	logger        *zap.Logger
+	busName       string
 
 	// Observability (nil if not configured)
-	metricsProvider MetricsProvider
-	tracingProvider TracingProvider
+	metricsProvider o11y.MetricsProvider
+	tracingProvider o11y.TracingProvider
 
 	// Pre-created metrics (lazy loaded)
-	publishCounter     Counter
-	publishSyncCounter Counter
-	subscribeCounter   Counter
-	unsubscribeCounter Counter
-	errorCounter       Counter
-	latencyHistogram   Histogram
-	subscriberGauge    Gauge
+	publishCounter     o11y.Counter
+	publishSyncCounter o11y.Counter
+	subscribeCounter   o11y.Counter
+	unsubscribeCounter o11y.Counter
+	errorCounter       o11y.Counter
+	latencyHistogram   o11y.Histogram
+	subscriberGauge    o11y.Gauge
 }
 
-func (b *basicEventBus) setupObservability(config *ObservabilityConfig) {
+func (b *basicEventBus) setupObservability(config *o11y.ObservabilityConfig) {
 	b.metricsProvider = config.MetricsProvider
 	b.tracingProvider = config.TracingProvider
 
@@ -108,14 +110,14 @@ func (b *basicEventBus) setupObservability(config *ObservabilityConfig) {
 func (b *basicEventBus) Start() error {
 	// Use atomic compare-and-swap to prevent double-start
 	if !atomic.CompareAndSwapInt32(&b.started, 0, 1) {
-		return fmt.Errorf("event bus already started")
+		return fmt.Errorf("event bus %s already started", b.busName)
 	}
 
 	b.wg.Add(1)
 
 	go func() {
 		defer b.wg.Done()
-		b.logger.Info("EventBus started, listening for messages")
+		b.logger.Info("EventBus started, listening for messages", zap.String("bus", b.busName))
 
 		for {
 			select {
@@ -133,8 +135,8 @@ func (b *basicEventBus) Start() error {
 									b.logger.Error("Error in OnEvent", zap.Error(err))
 									if b.errorCounter != nil {
 										b.errorCounter.Add(ctx, 1,
-											Label{Key: "operation", Value: "on_event"},
-											Label{Key: "topic", Value: msg.Topic},
+											o11y.Label{Key: "operation", Value: "on_event"},
+											o11y.Label{Key: "topic", Value: msg.Topic},
 										)
 									}
 								}
@@ -148,8 +150,8 @@ func (b *basicEventBus) Start() error {
 						b.logger.Error("Error in doPublishSync", zap.Error(err))
 						if b.errorCounter != nil {
 							b.errorCounter.Add(msg.Ctx, 1,
-								Label{Key: "operation", Value: "publish_sync"},
-								Label{Key: "topic", Value: msg.Topic},
+								o11y.Label{Key: "operation", Value: "publish_sync"},
+								o11y.Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
@@ -159,8 +161,8 @@ func (b *basicEventBus) Start() error {
 						b.logger.Error("Error in doSubscribe", zap.Error(err))
 						if b.errorCounter != nil {
 							b.errorCounter.Add(msg.Ctx, 1,
-								Label{Key: "operation", Value: "subscribe"},
-								Label{Key: "topic", Value: msg.Topic},
+								o11y.Label{Key: "operation", Value: "subscribe"},
+								o11y.Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
@@ -169,8 +171,8 @@ func (b *basicEventBus) Start() error {
 						b.logger.Error("Error in doUnsubscribe", zap.Error(err))
 						if b.errorCounter != nil {
 							b.errorCounter.Add(msg.Ctx, 1,
-								Label{Key: "operation", Value: "unsubscribe"},
-								Label{Key: "topic", Value: msg.Topic},
+								o11y.Label{Key: "operation", Value: "unsubscribe"},
+								o11y.Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
@@ -179,8 +181,8 @@ func (b *basicEventBus) Start() error {
 						b.logger.Error("Error in doUnsubscribeAll", zap.Error(err))
 						if b.errorCounter != nil {
 							b.errorCounter.Add(msg.Ctx, 1,
-								Label{Key: "operation", Value: "unsubscribe_all"},
-								Label{Key: "topic", Value: msg.Topic},
+								o11y.Label{Key: "operation", Value: "unsubscribe_all"},
+								o11y.Label{Key: "topic", Value: msg.Topic},
 							)
 						}
 					}
@@ -205,19 +207,19 @@ func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) 
 
 	// Start tracing span if available
 	if b.tracingProvider != nil {
-		var span Span
+		var span o11y.Span
 		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.publish")
 		defer span.End()
 
 		span.SetAttributes(
-			Label{Key: "topic", Value: topic},
-			Label{Key: "operation", Value: "publish"},
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "operation", Value: "publish"},
 		)
 	}
 
 	// Record metrics if available
 	if b.publishCounter != nil {
-		b.publishCounter.Add(ctx, 1, Label{Key: "topic", Value: topic})
+		b.publishCounter.Add(ctx, 1, o11y.Label{Key: "topic", Value: topic})
 	}
 
 	b.accept(EventBusMessage{
@@ -237,14 +239,14 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 	start := time.Now()
 
 	// Start tracing span if available
-	var span Span
+	var span o11y.Span
 	if b.tracingProvider != nil {
 		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.publish_sync")
 		defer span.End()
 
 		span.SetAttributes(
-			Label{Key: "topic", Value: topic},
-			Label{Key: "operation", Value: "publish_sync"},
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "operation", Value: "publish_sync"},
 		)
 	}
 
@@ -263,27 +265,27 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 
 	// Record metrics and span status
 	if b.publishSyncCounter != nil {
-		labels := []Label{
+		labels := []o11y.Label{
 			{Key: "topic", Value: topic},
 		}
 		if err != nil {
-			labels = append(labels, Label{Key: "status", Value: "error"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
 		} else {
-			labels = append(labels, Label{Key: "status", Value: "success"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
 		}
 		b.publishSyncCounter.Add(ctx, 1, labels...)
 	}
 
 	if b.latencyHistogram != nil {
 		duration := time.Since(start).Seconds()
-		b.latencyHistogram.Record(ctx, duration, Label{Key: "topic", Value: topic})
+		b.latencyHistogram.Record(ctx, duration, o11y.Label{Key: "topic", Value: topic})
 	}
 
 	if span != nil {
 		if err != nil {
-			span.SetStatus(SpanStatusError, err.Error())
+			span.SetStatus(o11y.SpanStatusError, err.Error())
 		} else {
-			span.SetStatus(SpanStatusOK, "")
+			span.SetStatus(o11y.SpanStatusOK, "")
 		}
 	}
 
@@ -297,14 +299,14 @@ func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, to
 	}
 
 	// Start tracing span if available
-	var span Span
+	var span o11y.Span
 	if b.tracingProvider != nil {
 		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.subscribe")
 		defer span.End()
 
 		span.SetAttributes(
-			Label{Key: "topic", Value: topic},
-			Label{Key: "operation", Value: "subscribe"},
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "operation", Value: "subscribe"},
 		)
 	}
 
@@ -328,22 +330,22 @@ func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, to
 
 	// Record metrics and span status
 	if b.subscribeCounter != nil {
-		labels := []Label{
+		labels := []o11y.Label{
 			{Key: "topic", Value: topic},
 		}
 		if err != nil {
-			labels = append(labels, Label{Key: "status", Value: "error"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
 		} else {
-			labels = append(labels, Label{Key: "status", Value: "success"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
 		}
 		b.subscribeCounter.Add(ctx, 1, labels...)
 	}
 
 	if span != nil {
 		if err != nil {
-			span.SetStatus(SpanStatusError, err.Error())
+			span.SetStatus(o11y.SpanStatusError, err.Error())
 		} else {
-			span.SetStatus(SpanStatusOK, "")
+			span.SetStatus(o11y.SpanStatusOK, "")
 		}
 	}
 
@@ -356,14 +358,14 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, subscriber Subscriber, 
 	}
 
 	// Start tracing span if available
-	var span Span
+	var span o11y.Span
 	if b.tracingProvider != nil {
 		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe")
 		defer span.End()
 
 		span.SetAttributes(
-			Label{Key: "topic", Value: topic},
-			Label{Key: "operation", Value: "unsubscribe"},
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "operation", Value: "unsubscribe"},
 		)
 	}
 
@@ -382,22 +384,22 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, subscriber Subscriber, 
 
 	// Record metrics and span status
 	if b.unsubscribeCounter != nil {
-		labels := []Label{
+		labels := []o11y.Label{
 			{Key: "topic", Value: topic},
 		}
 		if err != nil {
-			labels = append(labels, Label{Key: "status", Value: "error"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
 		} else {
-			labels = append(labels, Label{Key: "status", Value: "success"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
 		}
 		b.unsubscribeCounter.Add(ctx, 1, labels...)
 	}
 
 	if span != nil {
 		if err != nil {
-			span.SetStatus(SpanStatusError, err.Error())
+			span.SetStatus(o11y.SpanStatusError, err.Error())
 		} else {
-			span.SetStatus(SpanStatusOK, "")
+			span.SetStatus(o11y.SpanStatusOK, "")
 		}
 	}
 
@@ -410,13 +412,13 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 	}
 
 	// Start tracing span if available
-	var span Span
+	var span o11y.Span
 	if b.tracingProvider != nil {
 		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe_all")
 		defer span.End()
 
 		span.SetAttributes(
-			Label{Key: "operation", Value: "unsubscribe_all"},
+			o11y.Label{Key: "operation", Value: "unsubscribe_all"},
 		)
 	}
 
@@ -435,13 +437,13 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 
 	// Record metrics and span status
 	if b.unsubscribeCounter != nil {
-		labels := []Label{
+		labels := []o11y.Label{
 			{Key: "topic", Value: "*"}, // Use "*" to indicate all topics
 		}
 		if err != nil {
-			labels = append(labels, Label{Key: "status", Value: "error"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
 		} else {
-			labels = append(labels, Label{Key: "status", Value: "success"})
+			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
 		}
 		// For UnsubscribeAll, we increment by 1 operation (not the count of subscriptions)
 		b.unsubscribeCounter.Add(ctx, 1, labels...)
@@ -449,9 +451,9 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 
 	if span != nil {
 		if err != nil {
-			span.SetStatus(SpanStatusError, err.Error())
+			span.SetStatus(o11y.SpanStatusError, err.Error())
 		} else {
-			span.SetStatus(SpanStatusOK, "")
+			span.SetStatus(o11y.SpanStatusOK, "")
 		}
 	}
 

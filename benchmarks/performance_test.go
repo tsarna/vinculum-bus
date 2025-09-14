@@ -7,13 +7,14 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"github.com/tsarna/vinculum/pkg/vinculum/otel"
 )
 
 // NoOpSubscriber for benchmarking - minimal overhead
 type NoOpSubscriber struct {
-	vinculum.BaseSubscriber
+	bus.BaseSubscriber
 }
 
 func (n *NoOpSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
@@ -22,7 +23,7 @@ func (n *NoOpSubscriber) OnEvent(ctx context.Context, topic string, message any,
 
 func BenchmarkPublishNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		b.Fatalf("Build() returned error: %v", err)
 	}
@@ -43,7 +44,7 @@ func BenchmarkPublishNoObservability(b *testing.B) {
 
 func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		b.Fatalf("Build() returned error: %v", err)
 	}
@@ -51,7 +52,7 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	defer eventBus.Stop()
 
 	// Create standalone metrics provider
-	metricsProvider := vinculum.NewStandaloneMetricsProvider(eventBus, &vinculum.StandaloneMetricsConfig{
+	metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
 		Interval:     time.Minute, // Long interval for benchmarking
 		MetricsTopic: "$metrics",
 		ServiceName:  "benchmark",
@@ -60,7 +61,7 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	defer metricsProvider.Stop()
 
 	// Create observable EventBus with standalone metrics
-	observableEventBus, err := vinculum.NewEventBus().
+	observableEventBus, err := bus.NewEventBus().
 		WithLogger(logger).
 		WithMetrics(metricsProvider).
 		WithServiceInfo("benchmark", "v1.0.0").
@@ -91,7 +92,7 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 	otelProvider := otel.NewProvider("benchmark", "v1.0.0")
 
 	// Create observable EventBus with OpenTelemetry
-	observableEventBus, err := vinculum.NewEventBus().
+	observableEventBus, err := bus.NewEventBus().
 		WithLogger(logger).
 		WithObservability(otelProvider, otelProvider).
 		WithServiceInfo("benchmark", "v1.0.0").
@@ -117,7 +118,7 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 
 func BenchmarkPublishSyncNoObservability(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		b.Fatalf("Build() returned error: %v", err)
 	}
@@ -138,7 +139,7 @@ func BenchmarkPublishSyncNoObservability(b *testing.B) {
 
 func BenchmarkThroughput(b *testing.B) {
 	logger := zap.NewNop()
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		b.Fatalf("Build() returned error: %v", err)
 	}

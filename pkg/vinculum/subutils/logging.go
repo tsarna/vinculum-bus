@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -12,7 +12,7 @@ import (
 // LoggingSubscriber wraps another subscriber and logs all method calls for debugging and demonstration.
 // If the wrapped subscriber is nil, it acts as a standalone logging subscriber.
 type LoggingSubscriber struct {
-	wrapped  vinculum.Subscriber // The subscriber to wrap (can be nil)
+	wrapped  bus.Subscriber // The subscriber to wrap (can be nil)
 	logger   *zap.Logger
 	logLevel zapcore.Level
 	name     string // Optional name for identification in logs
@@ -20,7 +20,7 @@ type LoggingSubscriber struct {
 
 // NewLoggingSubscriber creates a new LoggingSubscriber that wraps another subscriber.
 // If wrapped is nil, it acts as a standalone logging subscriber.
-func NewLoggingSubscriber(wrapped vinculum.Subscriber, logger *zap.Logger, logLevel zapcore.Level) *LoggingSubscriber {
+func NewLoggingSubscriber(wrapped bus.Subscriber, logger *zap.Logger, logLevel zapcore.Level) *LoggingSubscriber {
 	return &LoggingSubscriber{
 		wrapped:  wrapped,
 		logger:   logger,
@@ -31,7 +31,7 @@ func NewLoggingSubscriber(wrapped vinculum.Subscriber, logger *zap.Logger, logLe
 
 // NewNamedLoggingSubscriber creates a new LoggingSubscriber that wraps another subscriber with a custom name.
 // If wrapped is nil, it acts as a standalone logging subscriber.
-func NewNamedLoggingSubscriber(wrapped vinculum.Subscriber, logger *zap.Logger, logLevel zapcore.Level, name string) *LoggingSubscriber {
+func NewNamedLoggingSubscriber(wrapped bus.Subscriber, logger *zap.Logger, logLevel zapcore.Level, name string) *LoggingSubscriber {
 	return &LoggingSubscriber{
 		wrapped:  wrapped,
 		logger:   logger,
@@ -45,7 +45,6 @@ func (l *LoggingSubscriber) OnSubscribe(ctx context.Context, topic string) error
 	l.logger.Log(l.logLevel, "OnSubscribe called",
 		zap.String("subscriber", l.name),
 		zap.String("topic", topic),
-		zap.Bool("hasWrapped", l.wrapped != nil),
 	)
 
 	// Call wrapped subscriber if present
@@ -107,7 +106,7 @@ func (l *LoggingSubscriber) OnEvent(ctx context.Context, topic string, message a
 	return nil
 }
 
-func (l *LoggingSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (l *LoggingSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	if l.wrapped != nil {
 		return l.wrapped.PassThrough(msg)
 	} else {

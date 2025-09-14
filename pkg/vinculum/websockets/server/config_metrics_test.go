@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -20,15 +20,15 @@ func (m *testEventBus) Stop() error {
 	return nil
 }
 
-func (m *testEventBus) Subscribe(ctx context.Context, subscriber vinculum.Subscriber, topic string) error {
+func (m *testEventBus) Subscribe(ctx context.Context, subscriber bus.Subscriber, topic string) error {
 	return nil
 }
 
-func (m *testEventBus) Unsubscribe(ctx context.Context, subscriber vinculum.Subscriber, topic string) error {
+func (m *testEventBus) Unsubscribe(ctx context.Context, subscriber bus.Subscriber, topic string) error {
 	return nil
 }
 
-func (m *testEventBus) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+func (m *testEventBus) UnsubscribeAll(ctx context.Context, subscriber bus.Subscriber) error {
 	return nil
 }
 
@@ -53,7 +53,7 @@ func (m *testEventBus) OnEvent(ctx context.Context, topic string, message any, f
 	return nil
 }
 
-func (m *testEventBus) PassThrough(msg vinculum.EventBusMessage) error {
+func (m *testEventBus) PassThrough(msg bus.EventBusMessage) error {
 	return nil
 }
 

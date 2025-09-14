@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 )
 
 // WebSocketMetrics defines the standard metrics collected by the WebSocket server.
@@ -12,31 +12,31 @@ import (
 // WebSocket server performance and behavior.
 type WebSocketMetrics struct {
 	// Connection metrics
-	activeConnections  vinculum.Gauge     // Current number of active WebSocket connections
-	totalConnections   vinculum.Counter   // Total number of connections established
-	connectionDuration vinculum.Histogram // Duration of WebSocket connections
-	connectionErrors   vinculum.Counter   // Number of connection errors (upgrade failures, etc.)
+	activeConnections  o11y.Gauge     // Current number of active WebSocket connections
+	totalConnections   o11y.Counter   // Total number of connections established
+	connectionDuration o11y.Histogram // Duration of WebSocket connections
+	connectionErrors   o11y.Counter   // Number of connection errors (upgrade failures, etc.)
 
 	// Message metrics
-	messagesReceived vinculum.Counter   // Total messages received from clients
-	messagesSent     vinculum.Counter   // Total messages sent to clients
-	messageErrors    vinculum.Counter   // Number of message processing errors
-	messageSize      vinculum.Histogram // Size distribution of messages (bytes)
+	messagesReceived o11y.Counter   // Total messages received from clients
+	messagesSent     o11y.Counter   // Total messages sent to clients
+	messageErrors    o11y.Counter   // Number of message processing errors
+	messageSize      o11y.Histogram // Size distribution of messages (bytes)
 
 	// Request metrics (by message kind)
-	requestsTotal   vinculum.Counter   // Total requests by kind (subscribe, unsubscribe, event, etc.)
-	requestDuration vinculum.Histogram // Request processing duration
-	requestErrors   vinculum.Counter   // Request errors by kind
+	requestsTotal   o11y.Counter   // Total requests by kind (subscribe, unsubscribe, event, etc.)
+	requestDuration o11y.Histogram // Request processing duration
+	requestErrors   o11y.Counter   // Request errors by kind
 
 	// Health metrics
-	pingsSent     vinculum.Counter // Number of ping frames sent
-	pongTimeouts  vinculum.Counter // Number of pong timeouts (dead connections)
-	writeTimeouts vinculum.Counter // Number of write timeouts
+	pingsSent     o11y.Counter // Number of ping frames sent
+	pongTimeouts  o11y.Counter // Number of pong timeouts (dead connections)
+	writeTimeouts o11y.Counter // Number of write timeouts
 }
 
 // NewWebSocketMetrics creates a new WebSocketMetrics instance using the provided MetricsProvider.
 // If the provider is nil, returns nil (no metrics will be collected).
-func NewWebSocketMetrics(provider vinculum.MetricsProvider) *WebSocketMetrics {
+func NewWebSocketMetrics(provider o11y.MetricsProvider) *WebSocketMetrics {
 	if provider == nil {
 		return nil
 	}
@@ -97,7 +97,7 @@ func (m *WebSocketMetrics) RecordConnectionError(ctx context.Context, errorType 
 	if m == nil {
 		return
 	}
-	m.connectionErrors.Add(ctx, 1, vinculum.Label{Key: "error_type", Value: errorType})
+	m.connectionErrors.Add(ctx, 1, o11y.Label{Key: "error_type", Value: errorType})
 }
 
 // Message metrics
@@ -107,8 +107,8 @@ func (m *WebSocketMetrics) RecordMessageReceived(ctx context.Context, sizeBytes 
 	if m == nil {
 		return
 	}
-	m.messagesReceived.Add(ctx, 1, vinculum.Label{Key: "kind", Value: messageKind})
-	m.messageSize.Record(ctx, float64(sizeBytes), vinculum.Label{Key: "direction", Value: "received"})
+	m.messagesReceived.Add(ctx, 1, o11y.Label{Key: "kind", Value: messageKind})
+	m.messageSize.Record(ctx, float64(sizeBytes), o11y.Label{Key: "direction", Value: "received"})
 }
 
 // RecordMessageSent records when a message is sent to a client.
@@ -116,8 +116,8 @@ func (m *WebSocketMetrics) RecordMessageSent(ctx context.Context, sizeBytes int,
 	if m == nil {
 		return
 	}
-	m.messagesSent.Add(ctx, 1, vinculum.Label{Key: "type", Value: messageType})
-	m.messageSize.Record(ctx, float64(sizeBytes), vinculum.Label{Key: "direction", Value: "sent"})
+	m.messagesSent.Add(ctx, 1, o11y.Label{Key: "type", Value: messageType})
+	m.messageSize.Record(ctx, float64(sizeBytes), o11y.Label{Key: "direction", Value: "sent"})
 }
 
 // RecordMessageError records message processing errors.
@@ -125,7 +125,7 @@ func (m *WebSocketMetrics) RecordMessageError(ctx context.Context, errorType str
 	if m == nil {
 		return
 	}
-	labels := []vinculum.Label{
+	labels := []o11y.Label{
 		{Key: "error_type", Value: errorType},
 		{Key: "kind", Value: messageKind},
 	}
@@ -145,14 +145,14 @@ func (m *WebSocketMetrics) RecordRequest(ctx context.Context, requestKind string
 	}
 
 	startTime := time.Now()
-	m.requestsTotal.Add(ctx, 1, vinculum.Label{Key: "kind", Value: requestKind})
+	m.requestsTotal.Add(ctx, 1, o11y.Label{Key: "kind", Value: requestKind})
 
 	return func(err error) {
 		duration := time.Since(startTime)
-		m.requestDuration.Record(ctx, duration.Seconds(), vinculum.Label{Key: "kind", Value: requestKind})
+		m.requestDuration.Record(ctx, duration.Seconds(), o11y.Label{Key: "kind", Value: requestKind})
 
 		if err != nil {
-			labels := []vinculum.Label{
+			labels := []o11y.Label{
 				{Key: "kind", Value: requestKind},
 				{Key: "error", Value: err.Error()},
 			}

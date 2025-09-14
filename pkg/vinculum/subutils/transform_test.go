@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/transform"
 )
 
@@ -38,7 +38,7 @@ func (t *testSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return nil
 }
 
-func (t *testSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (t *testSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	return nil
 }
 
@@ -65,9 +65,9 @@ func TestTransformingSubscriber_PassThroughMethods(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test PassThrough
-	msg := vinculum.EventBusMessage{
+	msg := bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypeEvent,
+		MsgType: bus.MessageTypeEvent,
 		Topic:   "test/topic",
 		Payload: "test data",
 	}

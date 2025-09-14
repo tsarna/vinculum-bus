@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 )
 
 // asyncTestSubscriber is a subscriber for testing that tracks all operations
@@ -17,7 +17,7 @@ type asyncTestSubscriber struct {
 	subscribes   []string
 	unsubscribes []string
 	events       []asyncTestEvent
-	passthroughs []vinculum.EventBusMessage
+	passthroughs []bus.EventBusMessage
 	processDelay time.Duration // Artificial delay for testing
 }
 
@@ -61,7 +61,7 @@ func (a *asyncTestSubscriber) OnEvent(ctx context.Context, topic string, message
 	return nil
 }
 
-func (a *asyncTestSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (a *asyncTestSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	if a.processDelay > 0 {
 		time.Sleep(a.processDelay)
 	}
@@ -187,9 +187,9 @@ func TestAsyncQueueingSubscriber_PassThrough(t *testing.T) {
 	ctx := context.Background()
 
 	// Send PassThrough messages (using a message type that goes to PassThrough, not a specific handler)
-	msg1 := vinculum.EventBusMessage{
+	msg1 := bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypePassThrough,
+		MsgType: bus.MessageTypePassThrough,
 		Topic:   "test/topic",
 		Payload: "test data",
 	}

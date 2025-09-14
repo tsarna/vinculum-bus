@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +19,7 @@ type SubscriptionController interface {
 	//   - Call eventBus.Subscribe with different patterns to modify the subscription
 	//   - Call eventBus.Subscribe multiple times to split into multiple subscriptions
 	//   - Return an error without calling eventBus.Subscribe to deny the subscription
-	Subscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error
+	Subscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error
 
 	// Unsubscribe is called when a client wants to unsubscribe from a topic pattern.
 	// The controller is responsible for making the actual EventBus.Unsubscribe call(s).
@@ -28,7 +28,7 @@ type SubscriptionController interface {
 	//   - Call eventBus.Unsubscribe with different patterns to modify the unsubscription
 	//   - Call eventBus.Unsubscribe multiple times to handle multiple subscriptions
 	//   - Return an error without calling eventBus.Unsubscribe to deny the unsubscription
-	Unsubscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error
+	Unsubscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error
 
 	// UnsubscribeAll is called when a client wants to unsubscribe from all topics.
 	// The controller is responsible for making the actual EventBus.UnsubscribeAll call.
@@ -36,7 +36,7 @@ type SubscriptionController interface {
 	//   - Call eventBus.UnsubscribeAll to allow as-is
 	//   - Call specific eventBus.Unsubscribe calls to handle partial unsubscriptions
 	//   - Return an error without calling eventBus methods to deny the unsubscribe all
-	UnsubscribeAll(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber) error
+	UnsubscribeAll(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber) error
 }
 
 // SubscriptionControllerFactory creates a SubscriptionController instance.
@@ -61,17 +61,17 @@ func NewPassthroughSubscriptionController(logger *zap.Logger) SubscriptionContro
 }
 
 // Subscribe allows the subscription as-is by calling EventBus.Subscribe directly.
-func (p *PassthroughSubscriptionController) Subscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (p *PassthroughSubscriptionController) Subscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	return eventBus.Subscribe(ctx, subscriber, topicPattern)
 }
 
 // Unsubscribe allows the unsubscription as-is by calling EventBus.Unsubscribe directly.
-func (p *PassthroughSubscriptionController) Unsubscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (p *PassthroughSubscriptionController) Unsubscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	return eventBus.Unsubscribe(ctx, subscriber, topicPattern)
 }
 
 // UnsubscribeAll allows the unsubscribe all as-is by calling EventBus.UnsubscribeAll directly.
-func (p *PassthroughSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber) error {
+func (p *PassthroughSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber) error {
 	return eventBus.UnsubscribeAll(ctx, subscriber)
 }
 
@@ -99,7 +99,7 @@ func NewTopicPrefixSubscriptionController(prefix string) SubscriptionControllerF
 
 // Subscribe only allows subscriptions to topics with the configured prefix.
 // If allowed, it delegates to the embedded PassthroughSubscriptionController.
-func (t *TopicPrefixSubscriptionController) Subscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *TopicPrefixSubscriptionController) Subscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	if len(topicPattern) >= len(t.prefix) && topicPattern[:len(t.prefix)] == t.prefix {
 		// Delegate to passthrough controller to make the actual EventBus call
 		return t.PassthroughSubscriptionController.Subscribe(ctx, eventBus, subscriber, topicPattern)
@@ -109,7 +109,7 @@ func (t *TopicPrefixSubscriptionController) Subscribe(ctx context.Context, event
 
 // Unsubscribe only allows unsubscriptions from topics with the configured prefix.
 // If allowed, it delegates to the embedded PassthroughSubscriptionController.
-func (t *TopicPrefixSubscriptionController) Unsubscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *TopicPrefixSubscriptionController) Unsubscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	if len(topicPattern) >= len(t.prefix) && topicPattern[:len(t.prefix)] == t.prefix {
 		// Delegate to passthrough controller to make the actual EventBus call
 		return t.PassthroughSubscriptionController.Unsubscribe(ctx, eventBus, subscriber, topicPattern)
@@ -119,7 +119,7 @@ func (t *TopicPrefixSubscriptionController) Unsubscribe(ctx context.Context, eve
 
 // UnsubscribeAll allows unsubscribing from all topics - no prefix restrictions apply.
 // It delegates to the embedded PassthroughSubscriptionController.
-func (t *TopicPrefixSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber) error {
+func (t *TopicPrefixSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber) error {
 	// Delegate to passthrough controller to make the actual EventBus call
 	return t.PassthroughSubscriptionController.UnsubscribeAll(ctx, eventBus, subscriber)
 }

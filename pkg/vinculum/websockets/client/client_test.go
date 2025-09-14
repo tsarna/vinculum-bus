@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -663,7 +663,7 @@ type mockSubscriber struct {
 	subscriptions   []string
 	unsubscriptions []string
 	events          []eventData
-	passThrough     []vinculum.EventBusMessage
+	passThrough     []bus.EventBusMessage
 }
 
 type eventData struct {
@@ -691,7 +691,7 @@ func (m *mockSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return nil
 }
 
-func (m *mockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (m *mockSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	m.passThrough = append(m.passThrough, msg)
 	return nil
 }
@@ -710,22 +710,22 @@ type disconnectData struct {
 	err error
 }
 
-func (m *mockMonitor) OnConnect(ctx context.Context, client vinculum.Client) {
+func (m *mockMonitor) OnConnect(ctx context.Context, client bus.Client) {
 	m.connects = append(m.connects, ctx)
 }
 
-func (m *mockMonitor) OnDisconnect(ctx context.Context, client vinculum.Client, err error) {
+func (m *mockMonitor) OnDisconnect(ctx context.Context, client bus.Client, err error) {
 	m.disconnects = append(m.disconnects, disconnectData{ctx: ctx, err: err})
 }
 
-func (m *mockMonitor) OnSubscribe(ctx context.Context, client vinculum.Client, topic string) {
+func (m *mockMonitor) OnSubscribe(ctx context.Context, client bus.Client, topic string) {
 	m.subscribes = append(m.subscribes, topic)
 }
 
-func (m *mockMonitor) OnUnsubscribe(ctx context.Context, client vinculum.Client, topic string) {
+func (m *mockMonitor) OnUnsubscribe(ctx context.Context, client bus.Client, topic string) {
 	m.unsubscribes = append(m.unsubscribes, topic)
 }
 
-func (m *mockMonitor) OnUnsubscribeAll(ctx context.Context, client vinculum.Client) {
+func (m *mockMonitor) OnUnsubscribeAll(ctx context.Context, client bus.Client) {
 	m.unsubscribeAll = append(m.unsubscribeAll, ctx)
 }

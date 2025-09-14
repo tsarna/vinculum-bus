@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -15,7 +15,7 @@ import (
 // It manages the lifecycle of WebSocket connections, authentication, and message routing
 // between WebSocket clients and the EventBus.
 type Listener struct {
-	eventBus               vinculum.EventBus
+	eventBus               bus.EventBus
 	logger                 *zap.Logger
 	config                 *ListenerConfig
 	subscriptionController SubscriptionController

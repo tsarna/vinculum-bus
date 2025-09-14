@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 )
 
 func TestMessageTransformFunc(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a sample EventBusMessage
-	originalMsg := &vinculum.EventBusMessage{
+	originalMsg := &bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypeEvent,
+		MsgType: bus.MessageTypeEvent,
 		Topic:   "sensor/temp1/data",
 		Payload: map[string]any{"temperature": 25.5},
 	}
@@ -175,9 +175,9 @@ func TestMessageTransformFunc(t *testing.T) {
 		}
 
 		// Test non-matching topic
-		nonMatchingMsg := &vinculum.EventBusMessage{
+		nonMatchingMsg := &bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeEvent,
+			MsgType: bus.MessageTypeEvent,
 			Topic:   "other/topic",
 			Payload: "test",
 		}
@@ -213,9 +213,9 @@ func TestMessageTransformFunc(t *testing.T) {
 		}
 
 		// Test non-matching topic
-		nonMatchingMsg := &vinculum.EventBusMessage{
+		nonMatchingMsg := &bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeEvent,
+			MsgType: bus.MessageTypeEvent,
 			Topic:   "other/topic",
 			Payload: "test",
 		}
@@ -267,9 +267,9 @@ func TestMessageTransformFunc(t *testing.T) {
 		}
 
 		// Test non-matching pattern
-		nonMatchingMsg := &vinculum.EventBusMessage{
+		nonMatchingMsg := &bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeEvent,
+			MsgType: bus.MessageTypeEvent,
 			Topic:   "other/topic",
 			Payload: "test",
 		}
@@ -296,9 +296,9 @@ func TestRateLimitByTopic(t *testing.T) {
 
 	transform := RateLimitByTopic(interval)
 
-	msg := &vinculum.EventBusMessage{
+	msg := &bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypeEvent,
+		MsgType: bus.MessageTypeEvent,
 		Topic:   "test/topic",
 		Payload: "test data",
 	}

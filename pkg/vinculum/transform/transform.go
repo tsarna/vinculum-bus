@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/amir-yaghoubi/mqttpattern"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 )
 
 // MessageTransformFunc is a function that transforms EventBus messages.
@@ -17,12 +17,12 @@ import (
 //   - msg: The EventBus message to transform
 //
 // Returns:
-//   - *vinculum.EventBusMessage: The transformed message (nil to drop the message)
+//   - *bus.EventBusMessage: The transformed message (nil to drop the message)
 //   - bool: Whether to continue calling subsequent transform functions (ignored if msg is nil)
 //
 // If a function returns nil, the message is dropped and no further transforms in a chain are called.
 // If a function returns false for the continue flag, no further transforms are called.
-type MessageTransformFunc func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool)
+type MessageTransformFunc func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool)
 
 // Common MessageTransformFunc implementations for reuse
 
@@ -42,7 +42,7 @@ type MessageTransformFunc func(msg *vinculum.EventBusMessage) (*vinculum.EventBu
 //	    DropTopicPattern("debug/#"),
 //	}
 func DropTopicPattern(pattern string) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		if mqttpattern.Matches(pattern, msg.Topic) {
 			return nil, false // Drop message, continue pipeline (though it will stop due to nil)
 		}
@@ -60,7 +60,7 @@ func DropTopicPattern(pattern string) MessageTransformFunc {
 //	    DropTopicPrefix("debug/"),
 //	}
 func DropTopicPrefix(prefix string) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		if strings.HasPrefix(msg.Topic, prefix) {
 			return nil, false // Drop message
 		}
@@ -77,8 +77,8 @@ func DropTopicPrefix(prefix string) MessageTransformFunc {
 //	    AddTopicPrefix("processed/"), // "events" becomes "processed/events"
 //	}
 func AddTopicPrefix(prefix string) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
-		modified := &vinculum.EventBusMessage{
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		modified := &bus.EventBusMessage{
 			Ctx:     msg.Ctx,
 			MsgType: msg.MsgType,
 			Topic:   prefix + msg.Topic,
@@ -102,7 +102,7 @@ func AddTopicPrefix(prefix string) MessageTransformFunc {
 func RateLimitByTopic(minInterval time.Duration) MessageTransformFunc {
 	lastSent := make(map[string]time.Time)
 
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		now := time.Now()
 		if last, exists := lastSent[msg.Topic]; exists {
 			if now.Sub(last) < minInterval {
@@ -125,7 +125,7 @@ func RateLimitByTopic(minInterval time.Duration) MessageTransformFunc {
 //	)
 //	transforms := []MessageTransformFunc{securityPipeline, otherTransform}
 func ChainTransforms(transforms ...MessageTransformFunc) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		current := msg
 		for _, transform := range transforms {
 			if current == nil {
@@ -177,7 +177,7 @@ type SimpleMessageTransformFunc func(ctx context.Context, payload any, fields ma
 //	    TransformOnPattern("sensor/+device/data", enrichSensorData),
 //	}
 func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		// Check if topic matches pattern
 		if !mqttpattern.Matches(pattern, msg.Topic) {
 			return msg, true // Topic doesn't match, pass through unchanged
@@ -195,7 +195,7 @@ func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) Me
 		}
 
 		// Create new message with transformed payload
-		transformed := &vinculum.EventBusMessage{
+		transformed := &bus.EventBusMessage{
 			Ctx:     msg.Ctx,
 			MsgType: msg.MsgType,
 			Topic:   msg.Topic,
@@ -217,7 +217,7 @@ func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) Me
 //	    IfPattern("sensor/+/data", AddTopicPrefix("processed/")),
 //	}
 func IfPattern(pattern string, transform MessageTransformFunc) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		if mqttpattern.Matches(pattern, msg.Topic) {
 			return transform(msg)
 		}
@@ -237,7 +237,7 @@ func IfPattern(pattern string, transform MessageTransformFunc) MessageTransformF
 //	        AddTopicPrefix("other-processed/")),
 //	}
 func IfElsePattern(pattern string, ifTransform, elseTransform MessageTransformFunc) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		if mqttpattern.Matches(pattern, msg.Topic) {
 			return ifTransform(msg)
 		}
@@ -263,7 +263,7 @@ func IfElsePattern(pattern string, ifTransform, elseTransform MessageTransformFu
 //	    ModifyPayload(addMetadata),
 //	}
 func ModifyPayload(transform SimpleMessageTransformFunc) MessageTransformFunc {
-	return func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		// Pass empty fields map since this is not pattern-based
 		transformedPayload := transform(msg.Ctx, msg.Payload, make(map[string]string))
 
@@ -273,7 +273,7 @@ func ModifyPayload(transform SimpleMessageTransformFunc) MessageTransformFunc {
 		}
 
 		// Create new message with transformed payload
-		modified := &vinculum.EventBusMessage{
+		modified := &bus.EventBusMessage{
 			Ctx:     msg.Ctx,
 			MsgType: msg.MsgType,
 			Topic:   msg.Topic,

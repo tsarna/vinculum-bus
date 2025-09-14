@@ -1,9 +1,10 @@
-package vinculum
+package bus
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"go.uber.org/zap"
 )
 
@@ -11,8 +12,9 @@ import (
 type EventBusBuilder struct {
 	logger          *zap.Logger
 	bufferSize      int
-	metricsProvider MetricsProvider
-	tracingProvider TracingProvider
+	busName         string
+	metricsProvider o11y.MetricsProvider
+	tracingProvider o11y.TracingProvider
 	serviceName     string
 	serviceVersion  string
 }
@@ -30,6 +32,12 @@ func (b *EventBusBuilder) WithLogger(logger *zap.Logger) *EventBusBuilder {
 	return b
 }
 
+// WithName sets the name for the EventBus
+func (b *EventBusBuilder) WithName(name string) *EventBusBuilder {
+	b.busName = name
+	return b
+}
+
 // WithBufferSize sets the channel buffer size for the EventBus
 func (b *EventBusBuilder) WithBufferSize(size int) *EventBusBuilder {
 	b.bufferSize = size
@@ -37,19 +45,19 @@ func (b *EventBusBuilder) WithBufferSize(size int) *EventBusBuilder {
 }
 
 // WithMetrics sets the metrics provider for the EventBus
-func (b *EventBusBuilder) WithMetrics(provider MetricsProvider) *EventBusBuilder {
+func (b *EventBusBuilder) WithMetrics(provider o11y.MetricsProvider) *EventBusBuilder {
 	b.metricsProvider = provider
 	return b
 }
 
 // WithTracing sets the tracing provider for the EventBus
-func (b *EventBusBuilder) WithTracing(provider TracingProvider) *EventBusBuilder {
+func (b *EventBusBuilder) WithTracing(provider o11y.TracingProvider) *EventBusBuilder {
 	b.tracingProvider = provider
 	return b
 }
 
 // WithObservability sets both metrics and tracing providers for the EventBus
-func (b *EventBusBuilder) WithObservability(metrics MetricsProvider, tracing TracingProvider) *EventBusBuilder {
+func (b *EventBusBuilder) WithObservability(metrics o11y.MetricsProvider, tracing o11y.TracingProvider) *EventBusBuilder {
 	b.metricsProvider = metrics
 	b.tracingProvider = tracing
 	return b
@@ -95,12 +103,13 @@ func (b *EventBusBuilder) Build() (EventBus, error) {
 		cancel:          cancel,
 		subscriptions:   make(map[Subscriber]map[string]matcher),
 		logger:          logger,
+		busName:         b.busName,
 		metricsProvider: b.metricsProvider,
 		tracingProvider: b.tracingProvider,
 	}
 
 	if b.metricsProvider != nil {
-		eb.setupObservability(&ObservabilityConfig{
+		eb.setupObservability(&o11y.ObservabilityConfig{
 			MetricsProvider: b.metricsProvider,
 			TracingProvider: b.tracingProvider,
 			ServiceName:     b.serviceName,

@@ -1,4 +1,4 @@
-package vinculum
+package o11y
 
 import (
 	"context"
@@ -14,7 +14,7 @@ type StandaloneMetricsConfig struct {
 	ServiceName  string        // Service name to include in metrics
 }
 
-// MetricsSnapshot represents the metrics data published to the EventBus
+// MetricsSnapshot represents the metrics data published via MetricsPublisher
 type MetricsSnapshot struct {
 	Timestamp   time.Time            `json:"timestamp"`
 	ServiceName string               `json:"service_name"`
@@ -23,10 +23,10 @@ type MetricsSnapshot struct {
 	Gauges      map[string]float64   `json:"gauges"`
 }
 
-// StandaloneMetricsProvider collects metrics and publishes them to the EventBus periodically
+// StandaloneMetricsProvider collects metrics and publishes them via MetricsPublisher periodically
 type StandaloneMetricsProvider struct {
-	config   StandaloneMetricsConfig
-	eventBus EventBus // Reference to the EventBus to publish metrics to
+	config    StandaloneMetricsConfig
+	publisher MetricsPublisher // Reference to the publisher to publish metrics to
 
 	// Thread-safe metric storage
 	counters   sync.Map // map[string]*standaloneCounter
@@ -42,7 +42,7 @@ type StandaloneMetricsProvider struct {
 }
 
 // NewStandaloneMetricsProvider creates a new standalone metrics provider
-func NewStandaloneMetricsProvider(eventBus EventBus, config *StandaloneMetricsConfig) *StandaloneMetricsProvider {
+func NewStandaloneMetricsProvider(publisher MetricsPublisher, config *StandaloneMetricsConfig) *StandaloneMetricsProvider {
 	if config == nil {
 		config = &StandaloneMetricsConfig{}
 	}
@@ -61,17 +61,17 @@ func NewStandaloneMetricsProvider(eventBus EventBus, config *StandaloneMetricsCo
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &StandaloneMetricsProvider{
-		config:   *config,
-		eventBus: eventBus,
-		ctx:      ctx,
-		cancel:   cancel,
+		config:    *config,
+		publisher: publisher,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
-// SetEventBus sets the EventBus reference for publishing metrics
-// This allows creating the provider before the EventBus to avoid circular dependencies
-func (s *StandaloneMetricsProvider) SetEventBus(eventBus EventBus) {
-	s.eventBus = eventBus
+// SetPublisher sets the MetricsPublisher reference for publishing metrics
+// This allows creating the provider before the publisher to avoid circular dependencies
+func (s *StandaloneMetricsProvider) SetPublisher(publisher MetricsPublisher) {
+	s.publisher = publisher
 }
 
 // Start begins the periodic metrics publishing
@@ -157,9 +157,9 @@ func (s *StandaloneMetricsProvider) publishMetrics() {
 		return true
 	})
 
-	// Publish to EventBus with background context (if EventBus is set)
-	if s.eventBus != nil {
-		s.eventBus.Publish(context.Background(), s.config.MetricsTopic, snapshot)
+	// Publish to publisher with background context (if publisher is set)
+	if s.publisher != nil {
+		s.publisher.Publish(context.Background(), s.config.MetricsTopic, snapshot)
 	}
 }
 

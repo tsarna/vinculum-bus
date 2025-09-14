@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
 	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 	"go.uber.org/zap"
@@ -21,7 +21,7 @@ import (
 type Connection struct {
 	ctx                    context.Context
 	conn                   *websocket.Conn
-	eventBus               vinculum.EventBus
+	eventBus               bus.EventBus
 	logger                 *zap.Logger
 	config                 *ListenerConfig
 	subscriptionController SubscriptionController
@@ -64,7 +64,7 @@ func newConnection(ctx context.Context, conn *websocket.Conn, config *ListenerCo
 	// 1. TransformingSubscriber (applies new message transforms if any)
 	// 2. AsyncQueueingSubscriber (async processing + periodic ticks)
 
-	var wrappedSubscriber vinculum.Subscriber = baseConnection
+	var wrappedSubscriber bus.Subscriber = baseConnection
 
 	// Add TransformingSubscriber if new transforms are configured
 	if len(config.messageTransforms) > 0 {
@@ -196,9 +196,9 @@ func (c *Connection) sendErrorResponse(id any, errorMsg string) {
 	}
 
 	// Create EventBusMessage for error response and send via PassThrough
-	responseMsg := vinculum.EventBusMessage{
+	responseMsg := bus.EventBusMessage{
 		Ctx:     c.ctx,
-		MsgType: vinculum.MessageTypePassThrough,
+		MsgType: bus.MessageTypePassThrough,
 		Topic:   "", // Error responses don't have topics
 		Payload: response,
 	}
@@ -280,10 +280,10 @@ func (c *Connection) OnUnsubscribe(ctx context.Context, topic string) error {
 // the normal event processing pipeline. This includes:
 // - MessageTypeTick: Periodic ping messages for connection health monitoring
 // - Other message types: Direct WebSocket message sending (e.g., responses)
-func (c *Connection) PassThrough(msg vinculum.EventBusMessage) error {
+func (c *Connection) PassThrough(msg bus.EventBusMessage) error {
 	var err error
 	switch msg.MsgType {
-	case vinculum.MessageTypeTick:
+	case bus.MessageTypeTick:
 		err = c.handleTick(msg.Ctx)
 	default:
 		err = c.sendPacket(msg.Ctx, msg.Payload)
@@ -398,9 +398,9 @@ func (c *Connection) respondToRequest(ctx context.Context, request websockets.Wi
 	}
 
 	// Create EventBusMessage for response and send via PassThrough
-	responseMsg := vinculum.EventBusMessage{
+	responseMsg := bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypePassThrough,
+		MsgType: bus.MessageTypePassThrough,
 		Topic:   "",       // Responses don't have topics
 		Payload: response, // websockets.WireMessage will be JSON marshaled directly
 	}

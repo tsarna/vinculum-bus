@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 )
 
 // Error definitions for AsyncQueueingSubscriber
@@ -16,7 +16,7 @@ var (
 )
 
 type asyncMessage struct {
-	vinculum.EventBusMessage
+	bus.EventBusMessage
 	Fields map[string]string
 }
 
@@ -24,7 +24,7 @@ type asyncMessage struct {
 // through a buffered channel queue. This allows the calling thread to return immediately
 // while events are processed in a background goroutine.
 type AsyncQueueingSubscriber struct {
-	wrapped   vinculum.Subscriber
+	wrapped   bus.Subscriber
 	queue     chan asyncMessage
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -47,7 +47,7 @@ type AsyncQueueingSubscriber struct {
 //
 // Note: You must call Close() to properly shutdown the background goroutine and
 // ensure all queued messages are processed.
-func NewAsyncQueueingSubscriber(wrapped vinculum.Subscriber, queueSize int) *AsyncQueueingSubscriber {
+func NewAsyncQueueingSubscriber(wrapped bus.Subscriber, queueSize int) *AsyncQueueingSubscriber {
 	if queueSize <= 0 {
 		queueSize = 100 // Default queue size
 	}
@@ -95,11 +95,11 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 // processMessage handles a single message by dispatching it to the appropriate wrapped subscriber method
 func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
 	switch msg.MsgType {
-	case vinculum.MessageTypeSubscribe:
+	case bus.MessageTypeSubscribe:
 		a.wrapped.OnSubscribe(msg.Ctx, msg.Topic)
-	case vinculum.MessageTypeUnsubscribe:
+	case bus.MessageTypeUnsubscribe:
 		a.wrapped.OnUnsubscribe(msg.Ctx, msg.Topic)
-	case vinculum.MessageTypeEvent:
+	case bus.MessageTypeEvent:
 		a.wrapped.OnEvent(msg.Ctx, msg.Topic, msg.Payload, msg.Fields)
 	default:
 		a.wrapped.PassThrough(msg.EventBusMessage)
@@ -121,9 +121,9 @@ func (a *AsyncQueueingSubscriber) processQueue() {
 		case msg := <-a.queue:
 			a.processMessage(msg)
 		case <-tickerChan:
-			a.wrapped.PassThrough(vinculum.EventBusMessage{
+			a.wrapped.PassThrough(bus.EventBusMessage{
 				Ctx:     context.Background(), // TODO can we use the connection's context here somehow?
-				MsgType: vinculum.MessageTypeTick,
+				MsgType: bus.MessageTypeTick,
 				Topic:   "",
 				Payload: nil,
 			})
@@ -156,9 +156,9 @@ func (a *AsyncQueueingSubscriber) OnSubscribe(ctx context.Context, topic string)
 	}
 
 	msg := asyncMessage{
-		EventBusMessage: vinculum.EventBusMessage{
+		EventBusMessage: bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeSubscribe,
+			MsgType: bus.MessageTypeSubscribe,
 			Topic:   topic,
 		},
 	}
@@ -179,9 +179,9 @@ func (a *AsyncQueueingSubscriber) OnUnsubscribe(ctx context.Context, topic strin
 	}
 
 	msg := asyncMessage{
-		EventBusMessage: vinculum.EventBusMessage{
+		EventBusMessage: bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeUnsubscribe,
+			MsgType: bus.MessageTypeUnsubscribe,
 			Topic:   topic,
 		},
 	}
@@ -202,9 +202,9 @@ func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, mes
 	}
 
 	msg := asyncMessage{
-		EventBusMessage: vinculum.EventBusMessage{
+		EventBusMessage: bus.EventBusMessage{
 			Ctx:     ctx,
-			MsgType: vinculum.MessageTypeEvent,
+			MsgType: bus.MessageTypeEvent,
 			Topic:   topic,
 			Payload: message,
 		},
@@ -225,7 +225,7 @@ func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, mes
 // or MessageTypeUnsubscribe as these have dedicated handler methods (OnEvent, OnSubscribe, OnUnsubscribe).
 // Use PassThrough only for message types that don't have specific handlers, or for forwarding
 // messages that should bypass the normal processing logic.
-func (a *AsyncQueueingSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (a *AsyncQueueingSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	// Check if closed first
 	if a.IsClosed() {
 		return ErrSubscriberClosed

@@ -1,0 +1,125 @@
+package config
+
+import (
+	"github.com/hashicorp/hcl/v2"
+	"github.com/robfig/cron/v3"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
+	"go.uber.org/zap"
+)
+
+type ConfigBuilder struct {
+	logger        *zap.Logger
+	sources       []any
+	blockHandlers map[string]BlockHandler
+}
+
+type Config struct {
+	Logger    *zap.Logger
+	Functions map[string]function.Function
+	Constants map[string]cty.Value
+	evalCtx   *hcl.EvalContext
+
+	BusCapsuleType cty.Type
+	CtyBusMap      map[string]cty.Value
+	Buses          map[string]bus.EventBus
+
+	Crons map[string]*cron.Cron
+}
+
+func NewConfig() *ConfigBuilder {
+	return &ConfigBuilder{
+		sources:       make([]any, 0),
+		blockHandlers: GetBlockHandlers(),
+	}
+}
+
+func (c *ConfigBuilder) WithLogger(logger *zap.Logger) *ConfigBuilder {
+	c.logger = logger
+	return c
+}
+
+func (c *ConfigBuilder) WithSources(sources ...any) *ConfigBuilder {
+	c.sources = append(c.sources, sources...)
+	return c
+}
+
+func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
+	config := &Config{
+		Logger:    cb.logger,
+		Constants: make(map[string]cty.Value),
+		Buses:     make(map[string]bus.EventBus),
+		Crons:     make(map[string]*cron.Cron),
+	}
+
+	bodies, diags := ParseConfigFiles(cb.sources...)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	functions, nonFunctionBodies, addDiags := config.ExtractUserFunctions(bodies)
+	diags = diags.Extend(addDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	config.Functions, addDiags = config.GetFunctions(functions)
+	diags = diags.Extend(addDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	blocks, addDiags := cb.GetBlocks(nonFunctionBodies)
+	diags = diags.Extend(addDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	// Add environment variables to the evaluation context
+	config.Constants["env"] = GetEnvObject()
+
+	config.evalCtx = &hcl.EvalContext{
+		Functions: config.Functions,
+		Variables: config.Constants,
+	}
+
+	// Preprocess blocks
+
+	blockHandlers := GetBlockHandlers()
+
+	for _, block := range blocks {
+		if handler, ok := blockHandlers[block.Type]; ok {
+			diags = diags.Extend(handler.Preprocess(block))
+		}
+	}
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	for _, handler := range blockHandlers {
+		diags = diags.Extend(handler.FinishPreprocessing(config))
+	}
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	blocks, sortDiags := cb.SortBlocksByDependencies(blocks)
+	diags = diags.Extend(sortDiags)
+
+	// Process blocks
+
+	for _, block := range blocks {
+		if handler, ok := blockHandlers[block.Type]; ok {
+			diags = diags.Extend(handler.Process(config, block))
+		}
+	}
+
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	config.Logger.Info("Config built successfully")
+
+	return config, diags
+}

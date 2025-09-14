@@ -1,4 +1,4 @@
-package vinculum
+package bus
 
 import (
 	"context"

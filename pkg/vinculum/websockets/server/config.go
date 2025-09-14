@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"github.com/tsarna/vinculum/pkg/vinculum/transform"
 	"go.uber.org/zap"
 )
@@ -13,9 +14,9 @@ import (
 // Use NewListener() to create a new configuration and chain methods
 // to set the required parameters before calling Build().
 type ListenerConfig struct {
-	eventBus               vinculum.EventBus
+	eventBus               bus.EventBus
 	logger                 *zap.Logger
-	metricsProvider        vinculum.MetricsProvider
+	metricsProvider        o11y.MetricsProvider
 	queueSize              int
 	pingInterval           time.Duration
 	writeTimeout           time.Duration
@@ -71,7 +72,7 @@ func NewListener() *ListenerConfig {
 
 // WithEventBus sets the EventBus for the WebSocket Listener.
 // The EventBus is required for integrating WebSocket connections with the pub/sub system.
-func (c *ListenerConfig) WithEventBus(eventBus vinculum.EventBus) *ListenerConfig {
+func (c *ListenerConfig) WithEventBus(eventBus bus.EventBus) *ListenerConfig {
 	c.eventBus = eventBus
 	return c
 }
@@ -88,7 +89,7 @@ func (c *ListenerConfig) WithLogger(logger *zap.Logger) *ListenerConfig {
 // such as connection counts, message rates, error rates, and connection durations.
 //
 // If not provided, no metrics will be collected.
-func (c *ListenerConfig) WithMetricsProvider(provider vinculum.MetricsProvider) *ListenerConfig {
+func (c *ListenerConfig) WithMetricsProvider(provider o11y.MetricsProvider) *ListenerConfig {
 	c.metricsProvider = provider
 	return c
 }

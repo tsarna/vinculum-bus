@@ -7,14 +7,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 	"go.uber.org/zap"
 )
 
 func TestListenerConfig_BuilderPattern(t *testing.T) {
 	logger := zap.NewNop()
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		t.Fatalf("Build() returned error: %v", err)
 	}
@@ -250,10 +250,10 @@ func TestListenerConfig_BuilderPattern(t *testing.T) {
 		assert.Empty(t, config.messageTransforms)
 
 		// Test setting message transforms using new transform package
-		transform1 := func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+		transform1 := func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 			return msg, true
 		}
-		transform2 := func(msg *vinculum.EventBusMessage) (*vinculum.EventBusMessage, bool) {
+		transform2 := func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 			return msg, false
 		}
 

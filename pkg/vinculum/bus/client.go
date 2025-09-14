@@ -1,4 +1,4 @@
-package vinculum
+package bus
 
 import (
 	"context"
@@ -35,7 +35,7 @@ type ClientMonitor interface {
 //
 // Example usage:
 //
-//	tracker := &vinculum.SubscriptionTracker{}
+//	tracker := &bus.SubscriptionTracker{}
 //	client, err := client.NewClient().
 //		WithURL("ws://localhost:8080/ws").
 //		WithSubscriber(subscriber).
@@ -202,11 +202,11 @@ func (s *SubscriptionTracker) GetSubscriptionTime(topicPattern string) time.Time
 // Example usage:
 //
 //	// Default configuration (with no-op logger)
-//	reconnector := vinculum.NewAutoReconnector().Build()
+//	reconnector := bus.NewAutoReconnector().Build()
 //
 //	// Custom configuration with logger
 //	logger, _ := zap.NewProduction()
-//	reconnector := vinculum.NewAutoReconnector().
+//	reconnector := bus.NewAutoReconnector().
 //		WithInitialDelay(500 * time.Millisecond).
 //		WithMaxDelay(10 * time.Second).
 //		WithBackoffFactor(1.5).

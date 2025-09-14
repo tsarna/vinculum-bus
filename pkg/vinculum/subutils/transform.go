@@ -3,14 +3,14 @@ package subutils
 import (
 	"context"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/transform"
 )
 
 // TransformingSubscriber wraps another subscriber and applies message transforms
 // to events before passing them to the wrapped subscriber.
 type TransformingSubscriber struct {
-	wrapped    vinculum.Subscriber
+	wrapped    bus.Subscriber
 	transforms []transform.MessageTransformFunc
 }
 
@@ -34,7 +34,7 @@ type TransformingSubscriber struct {
 //	        }
 //	    }),
 //	)
-func NewTransformingSubscriber(wrapped vinculum.Subscriber, transforms ...transform.MessageTransformFunc) *TransformingSubscriber {
+func NewTransformingSubscriber(wrapped bus.Subscriber, transforms ...transform.MessageTransformFunc) *TransformingSubscriber {
 	return &TransformingSubscriber{
 		wrapped:    wrapped,
 		transforms: transforms,
@@ -61,9 +61,9 @@ func (t *TransformingSubscriber) OnEvent(ctx context.Context, topic string, mess
 	}
 
 	// Create an EventBusMessage for the transform pipeline
-	eventMsg := &vinculum.EventBusMessage{
+	eventMsg := &bus.EventBusMessage{
 		Ctx:     ctx,
-		MsgType: vinculum.MessageTypeEvent,
+		MsgType: bus.MessageTypeEvent,
 		Topic:   topic,
 		Payload: message,
 	}
@@ -96,6 +96,6 @@ func (t *TransformingSubscriber) OnEvent(ctx context.Context, topic string, mess
 }
 
 // PassThrough passes through to the wrapped subscriber
-func (t *TransformingSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (t *TransformingSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	return t.wrapped.PassThrough(msg)
 }

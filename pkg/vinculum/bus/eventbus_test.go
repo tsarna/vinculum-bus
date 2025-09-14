@@ -1,4 +1,4 @@
-package vinculum
+package bus
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -100,33 +101,33 @@ func (m *MockSubscriber) Reset() {
 // Mock implementations for testing observability
 type mockMetricsProvider struct{}
 
-func (m *mockMetricsProvider) Counter(name string) Counter     { return &mockCounter{} }
-func (m *mockMetricsProvider) Histogram(name string) Histogram { return &mockHistogram{} }
-func (m *mockMetricsProvider) Gauge(name string) Gauge         { return &mockGauge{} }
+func (m *mockMetricsProvider) Counter(name string) o11y.Counter     { return &mockCounter{} }
+func (m *mockMetricsProvider) Histogram(name string) o11y.Histogram { return &mockHistogram{} }
+func (m *mockMetricsProvider) Gauge(name string) o11y.Gauge         { return &mockGauge{} }
 
 type mockCounter struct{}
 
-func (m *mockCounter) Add(ctx context.Context, value int64, labels ...Label) {}
+func (m *mockCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {}
 
 type mockHistogram struct{}
 
-func (m *mockHistogram) Record(ctx context.Context, value float64, labels ...Label) {}
+func (m *mockHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {}
 
 type mockGauge struct{}
 
-func (m *mockGauge) Set(ctx context.Context, value float64, labels ...Label) {}
+func (m *mockGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {}
 
 type mockTracingProvider struct{}
 
-func (m *mockTracingProvider) StartSpan(ctx context.Context, name string) (context.Context, Span) {
+func (m *mockTracingProvider) StartSpan(ctx context.Context, name string) (context.Context, o11y.Span) {
 	return ctx, &mockSpan{}
 }
 
 type mockSpan struct{}
 
-func (m *mockSpan) SetAttributes(labels ...Label)                     {}
-func (m *mockSpan) SetStatus(code SpanStatusCode, description string) {}
-func (m *mockSpan) End()                                              {}
+func (m *mockSpan) SetAttributes(labels ...o11y.Label)                     {}
+func (m *mockSpan) SetStatus(code o11y.SpanStatusCode, description string) {}
+func (m *mockSpan) End()                                                   {}
 
 func TestNewEventBus(t *testing.T) {
 	logger := zaptest.NewLogger(t)
@@ -1304,21 +1305,21 @@ type testMetricsProvider struct {
 	gauges     map[string]*testGauge
 }
 
-func (p *testMetricsProvider) Counter(name string) Counter {
+func (p *testMetricsProvider) Counter(name string) o11y.Counter {
 	if p.counters[name] == nil {
 		p.counters[name] = &testCounter{}
 	}
 	return p.counters[name]
 }
 
-func (p *testMetricsProvider) Histogram(name string) Histogram {
+func (p *testMetricsProvider) Histogram(name string) o11y.Histogram {
 	if p.histograms[name] == nil {
 		p.histograms[name] = &testHistogram{}
 	}
 	return p.histograms[name]
 }
 
-func (p *testMetricsProvider) Gauge(name string) Gauge {
+func (p *testMetricsProvider) Gauge(name string) o11y.Gauge {
 	if p.gauges[name] == nil {
 		p.gauges[name] = &testGauge{}
 	}
@@ -1329,7 +1330,7 @@ type testCounter struct {
 	value int64
 }
 
-func (c *testCounter) Add(ctx context.Context, value int64, labels ...Label) {
+func (c *testCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {
 	c.value += value
 }
 
@@ -1337,7 +1338,7 @@ type testHistogram struct {
 	values []float64
 }
 
-func (h *testHistogram) Record(ctx context.Context, value float64, labels ...Label) {
+func (h *testHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {
 	h.values = append(h.values, value)
 }
 
@@ -1345,21 +1346,21 @@ type testGauge struct {
 	value float64
 }
 
-func (g *testGauge) Set(ctx context.Context, value float64, labels ...Label) {
+func (g *testGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {
 	g.value = value
 }
 
 // testMetricsSubscriber captures metrics snapshots for testing
 type testMetricsSubscriber struct {
 	BaseSubscriber
-	receivedMetrics *MetricsSnapshot
+	receivedMetrics *o11y.MetricsSnapshot
 	metricsMutex    *sync.Mutex
 	metricsReceived *bool
 }
 
 func (s *testMetricsSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
 	if topic == "$metrics" {
-		if snapshot, ok := message.(MetricsSnapshot); ok {
+		if snapshot, ok := message.(o11y.MetricsSnapshot); ok {
 			s.metricsMutex.Lock()
 			*s.receivedMetrics = snapshot
 			*s.metricsReceived = true
@@ -1381,7 +1382,7 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	defer eventBus.Stop()
 
 	// Create standalone metrics provider with fast interval for testing
-	metricsProvider := NewStandaloneMetricsProvider(eventBus, &StandaloneMetricsConfig{
+	metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
 		Interval:     50 * time.Millisecond, // Fast for testing
 		MetricsTopic: "$metrics",
 		ServiceName:  "test-service",
@@ -1410,7 +1411,7 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	defer observableEventBus.Stop()
 
 	// Subscribe to metrics topic
-	var receivedMetrics MetricsSnapshot
+	var receivedMetrics o11y.MetricsSnapshot
 	var metricsMutex sync.Mutex
 	metricsReceived := false
 

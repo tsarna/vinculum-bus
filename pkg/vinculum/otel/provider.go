@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 )
 
 // Provider implements both MetricsProvider and TracingProvider using OpenTelemetry
@@ -28,25 +28,25 @@ func NewProvider(serviceName, serviceVersion string) *Provider {
 }
 
 // Counter creates an OpenTelemetry counter
-func (p *Provider) Counter(name string) vinculum.Counter {
+func (p *Provider) Counter(name string) o11y.Counter {
 	counter, _ := p.meter.Int64Counter(name)
 	return &otelCounter{counter: counter}
 }
 
 // Histogram creates an OpenTelemetry histogram
-func (p *Provider) Histogram(name string) vinculum.Histogram {
+func (p *Provider) Histogram(name string) o11y.Histogram {
 	histogram, _ := p.meter.Float64Histogram(name)
 	return &otelHistogram{histogram: histogram}
 }
 
 // Gauge creates an OpenTelemetry gauge (using UpDownCounter)
-func (p *Provider) Gauge(name string) vinculum.Gauge {
+func (p *Provider) Gauge(name string) o11y.Gauge {
 	gauge, _ := p.meter.Float64UpDownCounter(name)
 	return &otelGauge{gauge: gauge}
 }
 
 // StartSpan creates an OpenTelemetry span
-func (p *Provider) StartSpan(ctx context.Context, name string) (context.Context, vinculum.Span) {
+func (p *Provider) StartSpan(ctx context.Context, name string) (context.Context, o11y.Span) {
 	ctx, span := p.tracer.Start(ctx, name)
 	return ctx, &otelSpan{span: span}
 }
@@ -56,7 +56,7 @@ type otelCounter struct {
 	counter metric.Int64Counter
 }
 
-func (c *otelCounter) Add(ctx context.Context, value int64, labels ...vinculum.Label) {
+func (c *otelCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {
 	attrs := make([]attribute.KeyValue, len(labels))
 	for i, label := range labels {
 		attrs[i] = attribute.String(label.Key, label.Value)
@@ -69,7 +69,7 @@ type otelHistogram struct {
 	histogram metric.Float64Histogram
 }
 
-func (h *otelHistogram) Record(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (h *otelHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {
 	attrs := make([]attribute.KeyValue, len(labels))
 	for i, label := range labels {
 		attrs[i] = attribute.String(label.Key, label.Value)
@@ -82,7 +82,7 @@ type otelGauge struct {
 	gauge metric.Float64UpDownCounter
 }
 
-func (g *otelGauge) Set(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (g *otelGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {
 	attrs := make([]attribute.KeyValue, len(labels))
 	for i, label := range labels {
 		attrs[i] = attribute.String(label.Key, label.Value)
@@ -97,7 +97,7 @@ type otelSpan struct {
 	span trace.Span
 }
 
-func (s *otelSpan) SetAttributes(labels ...vinculum.Label) {
+func (s *otelSpan) SetAttributes(labels ...o11y.Label) {
 	attrs := make([]attribute.KeyValue, len(labels))
 	for i, label := range labels {
 		attrs[i] = attribute.String(label.Key, label.Value)
@@ -105,12 +105,12 @@ func (s *otelSpan) SetAttributes(labels ...vinculum.Label) {
 	s.span.SetAttributes(attrs...)
 }
 
-func (s *otelSpan) SetStatus(code vinculum.SpanStatusCode, description string) {
+func (s *otelSpan) SetStatus(code o11y.SpanStatusCode, description string) {
 	var otelCode codes.Code
 	switch code {
-	case vinculum.SpanStatusOK:
+	case o11y.SpanStatusOK:
 		otelCode = codes.Ok
-	case vinculum.SpanStatusError:
+	case o11y.SpanStatusError:
 		otelCode = codes.Error
 	default:
 		otelCode = codes.Unset

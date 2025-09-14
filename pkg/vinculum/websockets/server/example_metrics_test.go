@@ -7,7 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 	"github.com/tsarna/vinculum/pkg/vinculum/websockets/server"
 	"go.uber.org/zap"
 )
@@ -19,7 +20,7 @@ func ExampleWebSocketMetrics() {
 	defer logger.Sync()
 
 	// Create an EventBus (using the default implementation)
-	eventBus, err := vinculum.NewEventBus().
+	eventBus, err := bus.NewEventBus().
 		WithLogger(logger).
 		WithBufferSize(1000).
 		Build()
@@ -34,7 +35,7 @@ func ExampleWebSocketMetrics() {
 	}
 
 	// Create a metrics provider (using the standalone metrics provider)
-	metricsProvider := vinculum.NewStandaloneMetricsProvider(eventBus, &vinculum.StandaloneMetricsConfig{
+	metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
 		Interval:     30 * time.Second,
 		MetricsTopic: "$metrics",
 		ServiceName:  "websocket-server",
@@ -81,15 +82,15 @@ type loggingMetricsProvider struct {
 	logger *zap.Logger
 }
 
-func (p *loggingMetricsProvider) Counter(name string) vinculum.Counter {
+func (p *loggingMetricsProvider) Counter(name string) o11y.Counter {
 	return &loggingCounter{name: name, logger: p.logger}
 }
 
-func (p *loggingMetricsProvider) Histogram(name string) vinculum.Histogram {
+func (p *loggingMetricsProvider) Histogram(name string) o11y.Histogram {
 	return &loggingHistogram{name: name, logger: p.logger}
 }
 
-func (p *loggingMetricsProvider) Gauge(name string) vinculum.Gauge {
+func (p *loggingMetricsProvider) Gauge(name string) o11y.Gauge {
 	return &loggingGauge{name: name, logger: p.logger}
 }
 
@@ -99,7 +100,7 @@ type loggingCounter struct {
 	logger *zap.Logger
 }
 
-func (c *loggingCounter) Add(ctx context.Context, value int64, labels ...vinculum.Label) {
+func (c *loggingCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {
 	c.logger.Info("Counter incremented",
 		zap.String("metric", c.name),
 		zap.Int64("value", value),
@@ -112,7 +113,7 @@ type loggingHistogram struct {
 	logger *zap.Logger
 }
 
-func (h *loggingHistogram) Record(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (h *loggingHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {
 	h.logger.Info("Histogram recorded",
 		zap.String("metric", h.name),
 		zap.Float64("value", value),
@@ -125,7 +126,7 @@ type loggingGauge struct {
 	logger *zap.Logger
 }
 
-func (g *loggingGauge) Set(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (g *loggingGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {
 	g.logger.Info("Gauge set",
 		zap.String("metric", g.name),
 		zap.Float64("value", value),
@@ -133,14 +134,14 @@ func (g *loggingGauge) Set(ctx context.Context, value float64, labels ...vinculu
 	)
 }
 
-// ExampleMetricsWithCustomProvider shows how to use a custom metrics provider.
-func ExampleMetricsWithCustomProvider() {
+// ExampleListener_metricsWithCustomProvider shows how to use a custom metrics provider.
+func ExampleListener_metricsWithCustomProvider() {
 
 	// Create logger and EventBus
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	eventBus, err := vinculum.NewEventBus().
+	eventBus, err := bus.NewEventBus().
 		WithLogger(logger).
 		WithBufferSize(1000).
 		Build()
@@ -181,12 +182,12 @@ func ExampleMetricsWithCustomProvider() {
 	log.Fatal(server.ListenAndServe())
 }
 
-// ExampleMetricsDisabled shows how to run the WebSocket server without metrics.
-func ExampleMetricsDisabled() {
+// ExampleListener_metricsDisabled shows how to run the WebSocket server without metrics.
+func ExampleListener_metricsDisabled() {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	eventBus, err := vinculum.NewEventBus().
+	eventBus, err := bus.NewEventBus().
 		WithLogger(logger).
 		WithBufferSize(1000).
 		Build()

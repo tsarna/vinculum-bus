@@ -10,23 +10,23 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
 	"go.uber.org/zap"
 )
 
-// Client implements the vinculum.Client interface over a WebSocket connection.
+// Client implements the bus.Client interface over a WebSocket connection.
 // It connects to a vinculum WebSocket server and provides pub/sub functionality.
 type Client struct {
 	// Configuration
 	url              string
 	logger           *zap.Logger
 	dialTimeout      time.Duration
-	subscriber       vinculum.Subscriber
+	subscriber       bus.Subscriber
 	writeChannelSize int
 	authProvider     AuthorizationProvider  // Authorization provider
 	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
-	monitor          vinculum.ClientMonitor // Optional monitor for client events
+	monitor          bus.ClientMonitor // Optional monitor for client events
 
 	// Connection state
 	conn     *websocket.Conn
@@ -316,7 +316,7 @@ func (c *Client) OnEvent(ctx context.Context, topic string, message any, fields 
 }
 
 // PassThrough implements Subscriber.PassThrough
-func (c *Client) PassThrough(msg vinculum.EventBusMessage) error {
+func (c *Client) PassThrough(msg bus.EventBusMessage) error {
 	return c.subscriber.PassThrough(msg)
 }
 

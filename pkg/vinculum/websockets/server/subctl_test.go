@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 )
 
@@ -109,7 +109,7 @@ func TestSubscriptionControllers(t *testing.T) {
 	})
 }
 
-// mockSubscriber implements vinculum.Subscriber for testing
+// mockSubscriber implements bus.Subscriber for testing
 type mockSubscriber struct {
 	onSubscribeCalled   bool
 	onUnsubscribeCalled bool
@@ -131,7 +131,7 @@ func (m *mockSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return nil
 }
 
-func (m *mockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (m *mockSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	return nil
 }
 
@@ -142,7 +142,7 @@ type testSubscriptionController struct {
 	unsubscribeAllCalled bool
 }
 
-func (t *testSubscriptionController) Subscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *testSubscriptionController) Subscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	t.subscribeCalled = true
 	if topicPattern == "denied/topic" {
 		return fmt.Errorf("subscription denied")
@@ -151,7 +151,7 @@ func (t *testSubscriptionController) Subscribe(ctx context.Context, eventBus vin
 	return eventBus.Subscribe(ctx, subscriber, topicPattern)
 }
 
-func (t *testSubscriptionController) Unsubscribe(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber, topicPattern string) error {
+func (t *testSubscriptionController) Unsubscribe(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber, topicPattern string) error {
 	t.unsubscribeCalled = true
 	if topicPattern == "denied/topic" {
 		return fmt.Errorf("unsubscription denied")
@@ -160,21 +160,21 @@ func (t *testSubscriptionController) Unsubscribe(ctx context.Context, eventBus v
 	return eventBus.Unsubscribe(ctx, subscriber, topicPattern)
 }
 
-func (t *testSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus vinculum.EventBus, subscriber vinculum.Subscriber) error {
+func (t *testSubscriptionController) UnsubscribeAll(ctx context.Context, eventBus bus.EventBus, subscriber bus.Subscriber) error {
 	t.unsubscribeAllCalled = true
 	// Make the actual EventBus call
 	return eventBus.UnsubscribeAll(ctx, subscriber)
 }
 
-// mockEventBus implements vinculum.EventBus for testing
+// mockEventBus implements bus.EventBus for testing
 type mockEventBus struct{}
 
 // EventBus methods
-func (m *mockEventBus) Subscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
+func (m *mockEventBus) Subscribe(ctx context.Context, subscriber bus.Subscriber, topicPattern string) error {
 	return nil
 }
 
-func (m *mockEventBus) Unsubscribe(ctx context.Context, subscriber vinculum.Subscriber, topicPattern string) error {
+func (m *mockEventBus) Unsubscribe(ctx context.Context, subscriber bus.Subscriber, topicPattern string) error {
 	return nil
 }
 
@@ -182,7 +182,7 @@ func (m *mockEventBus) Publish(ctx context.Context, topic string, message any) e
 	return nil
 }
 
-func (m *mockEventBus) UnsubscribeAll(ctx context.Context, subscriber vinculum.Subscriber) error {
+func (m *mockEventBus) UnsubscribeAll(ctx context.Context, subscriber bus.Subscriber) error {
 	return nil
 }
 
@@ -211,6 +211,6 @@ func (m *mockEventBus) OnEvent(ctx context.Context, topic string, message any, f
 	return nil
 }
 
-func (m *mockEventBus) PassThrough(msg vinculum.EventBusMessage) error {
+func (m *mockEventBus) PassThrough(msg bus.EventBusMessage) error {
 	return nil
 }

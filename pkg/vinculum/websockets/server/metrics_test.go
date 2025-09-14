@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
 )
 
 // testMetricsProvider implements MetricsProvider for testing
@@ -26,7 +26,7 @@ func newTestMetricsProvider() *testMetricsProvider {
 	}
 }
 
-func (p *testMetricsProvider) Counter(name string) vinculum.Counter {
+func (p *testMetricsProvider) Counter(name string) o11y.Counter {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if counter, exists := p.counters[name]; exists {
@@ -37,7 +37,7 @@ func (p *testMetricsProvider) Counter(name string) vinculum.Counter {
 	return counter
 }
 
-func (p *testMetricsProvider) Histogram(name string) vinculum.Histogram {
+func (p *testMetricsProvider) Histogram(name string) o11y.Histogram {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if histogram, exists := p.histograms[name]; exists {
@@ -48,7 +48,7 @@ func (p *testMetricsProvider) Histogram(name string) vinculum.Histogram {
 	return histogram
 }
 
-func (p *testMetricsProvider) Gauge(name string) vinculum.Gauge {
+func (p *testMetricsProvider) Gauge(name string) o11y.Gauge {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if gauge, exists := p.gauges[name]; exists {
@@ -62,11 +62,11 @@ func (p *testMetricsProvider) Gauge(name string) vinculum.Gauge {
 // Test metric implementations
 type testCounter struct {
 	value  int64
-	labels []vinculum.Label
+	labels []o11y.Label
 	mu     sync.RWMutex
 }
 
-func (c *testCounter) Add(ctx context.Context, value int64, labels ...vinculum.Label) {
+func (c *testCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.value += value
@@ -79,7 +79,7 @@ func (c *testCounter) getValue() int64 {
 	return c.value
 }
 
-func (c *testCounter) getLabels() []vinculum.Label {
+func (c *testCounter) getLabels() []o11y.Label {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.labels
@@ -87,11 +87,11 @@ func (c *testCounter) getLabels() []vinculum.Label {
 
 type testHistogram struct {
 	values []float64
-	labels []vinculum.Label
+	labels []o11y.Label
 	mu     sync.RWMutex
 }
 
-func (h *testHistogram) Record(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (h *testHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.values = append(h.values, value)
@@ -104,7 +104,7 @@ func (h *testHistogram) getValues() []float64 {
 	return append([]float64(nil), h.values...)
 }
 
-func (h *testHistogram) getLabels() []vinculum.Label {
+func (h *testHistogram) getLabels() []o11y.Label {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.labels
@@ -112,11 +112,11 @@ func (h *testHistogram) getLabels() []vinculum.Label {
 
 type testGauge struct {
 	value  float64
-	labels []vinculum.Label
+	labels []o11y.Label
 	mu     sync.RWMutex
 }
 
-func (g *testGauge) Set(ctx context.Context, value float64, labels ...vinculum.Label) {
+func (g *testGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.value = value
@@ -129,7 +129,7 @@ func (g *testGauge) getValue() float64 {
 	return g.value
 }
 
-func (g *testGauge) getLabels() []vinculum.Label {
+func (g *testGauge) getLabels() []o11y.Label {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.labels

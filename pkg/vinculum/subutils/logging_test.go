@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsarna/vinculum/pkg/vinculum"
+	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -147,7 +147,7 @@ func TestLoggingSubscriberDifferentLogLevels(t *testing.T) {
 
 func TestLoggingSubscriberWithEventBus(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	eventBus, err := vinculum.NewEventBus().WithLogger(logger).Build()
+	eventBus, err := bus.NewEventBus().WithLogger(logger).Build()
 	if err != nil {
 		t.Fatalf("Build() returned error: %v", err)
 	}
@@ -217,7 +217,7 @@ func (m *MockSubscriber) OnEvent(ctx context.Context, topic string, message any,
 	return m.returnError
 }
 
-func (m *MockSubscriber) PassThrough(msg vinculum.EventBusMessage) error {
+func (m *MockSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	return nil
 }
 

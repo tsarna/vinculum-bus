@@ -190,7 +190,7 @@ When a `MetricsProvider` is configured, the server automatically tracks:
 
 ```go
 // Create standalone metrics provider
-metricsProvider := vinculum.NewStandaloneMetricsProvider(nil, &vinculum.StandaloneMetricsConfig{
+metricsProvider := o11y.NewStandaloneMetricsProvider(nil, &o11y.StandaloneMetricsConfig{
     Interval:     30 * time.Second,
     MetricsTopic: "$metrics",
     ServiceName:  "websocket-server",
