@@ -165,6 +165,8 @@ func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[strin
 	}
 
 	funcs["send"] = SendFunction(c)
+	funcs["sendjson"] = SendJSONFunction(c)
+	funcs["sendgo"] = SendGoFunction(c)
 
 	for name, function := range userFuncs {
 		if _, exists := funcs[name]; exists {

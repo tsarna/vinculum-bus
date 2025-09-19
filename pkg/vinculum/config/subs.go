@@ -83,9 +83,14 @@ type ActionSubscriber struct {
 }
 
 func (a *ActionSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	ctyMessage, err := AnyToCty(message)
+	if err != nil {
+		return err
+	}
+
 	evalCtxBuilder := NewContext(ctx).
-		WithStringAttribute("topic", topic)
-		//	WithAttribute("message", cty.StringVal(message)). // TODO convert to cty.Value
+		WithStringAttribute("topic", topic).
+		WithAttribute("msg", ctyMessage)
 
 	if len(fields) > 0 {
 		ctyFields := make(map[string]cty.Value)
@@ -102,7 +107,7 @@ func (a *ActionSubscriber) OnEvent(ctx context.Context, topic string, message an
 
 	a.Config.Logger.Info("OnEvent called", zap.String("topic", topic), zap.Any("message", message), zap.Any("fields", fields))
 
-	_, diags = a.ActionExpr.Value(evalCtx) // TODO log the value, maybe?
+	_, diags = a.ActionExpr.Value(evalCtx)
 	if diags.HasErrors() {
 		return diags
 	}
