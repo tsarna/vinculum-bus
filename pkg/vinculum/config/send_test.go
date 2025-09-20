@@ -28,12 +28,14 @@ type mockSubscriber struct {
 type mockMessage struct {
 	topic   string
 	payload any
+	fields  map[string]string
 }
 
 func (m *mockSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
 	m.messages = append(m.messages, mockMessage{
 		topic:   topic,
 		payload: message,
+		fields:  fields,
 	})
 	return nil
 }
@@ -67,6 +69,9 @@ func TestSendFunctions(t *testing.T) {
 	subscriber := &mockSubscriber{}
 	err = eventBus.Subscribe(context.Background(), subscriber, "test/topic")
 	require.NoError(t, err)
+
+	// Create subscriber capsule for direct testing
+	subscriberValue := NewSubscriberCapsule(subscriber)
 
 	// Test data - using cty values directly to avoid conversion issues
 	testCtyValue := cty.ObjectVal(map[string]cty.Value{
@@ -274,6 +279,82 @@ func TestSendFunctions(t *testing.T) {
 		_, err := sendFunc.Call([]cty.Value{ctxValue, invalidBus, topicValue, testCtyValue})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "expected EventBus capsule")
+		assert.Contains(t, err.Error(), "expected Subscriber capsule")
+	})
+
+	t.Run("send with fields - object", func(t *testing.T) {
+		subscriber.messages = nil // Reset messages
+
+		sendFunc := SendFunction(config)
+		fieldsValue := cty.ObjectVal(map[string]cty.Value{
+			"userId": cty.StringVal("123"),
+			"action": cty.StringVal("login"),
+			"count":  cty.NumberIntVal(42),
+		})
+
+		result, err := sendFunc.Call([]cty.Value{ctxValue, subscriberValue, topicValue, testCtyValue, fieldsValue})
+
+		require.NoError(t, err)
+		assert.Equal(t, cty.True, result)
+
+		// Verify the message was sent with fields directly to subscriber
+		require.Len(t, subscriber.messages, 1)
+		msg := subscriber.messages[0]
+		assert.Equal(t, "test/topic", msg.topic)
+		assert.Equal(t, testCtyValue, msg.payload)
+		require.NotNil(t, msg.fields)
+		assert.Equal(t, "123", msg.fields["userId"])
+		assert.Equal(t, "login", msg.fields["action"])
+		assert.Equal(t, "42", msg.fields["count"]) // Numbers converted to string
+	})
+
+	t.Run("send with fields - map", func(t *testing.T) {
+		subscriber.messages = nil // Reset
+		sendFunc := SendFunction(config)
+		fieldsValue := cty.MapVal(map[string]cty.Value{
+			"sessionId": cty.StringVal("abc-123"),
+			"timestamp": cty.StringVal("2023-01-01T00:00:00Z"),
+		})
+
+		result, err := sendFunc.Call([]cty.Value{ctxValue, subscriberValue, topicValue, testCtyValue, fieldsValue})
+
+		require.NoError(t, err)
+		assert.Equal(t, cty.True, result)
+
+		// Verify the message was sent with fields directly to subscriber
+		require.Len(t, subscriber.messages, 1)
+		msg := subscriber.messages[0]
+		assert.Equal(t, "test/topic", msg.topic)
+		assert.Equal(t, testCtyValue, msg.payload)
+		require.NotNil(t, msg.fields)
+		assert.Equal(t, "abc-123", msg.fields["sessionId"])
+		assert.Equal(t, "2023-01-01T00:00:00Z", msg.fields["timestamp"])
+	})
+
+	t.Run("send without fields - backward compatibility", func(t *testing.T) {
+		subscriber.messages = nil // Reset
+		sendFunc := SendFunction(config)
+
+		result, err := sendFunc.Call([]cty.Value{ctxValue, subscriberValue, topicValue, testCtyValue})
+
+		require.NoError(t, err)
+		assert.Equal(t, cty.True, result)
+
+		// Verify backward compatibility (no fields)
+		require.Len(t, subscriber.messages, 1)
+		msg := subscriber.messages[0]
+		assert.Equal(t, "test/topic", msg.topic)
+		assert.Equal(t, testCtyValue, msg.payload)
+		assert.Nil(t, msg.fields) // Should be nil when no fields provided
+	})
+
+	t.Run("error handling - invalid fields type", func(t *testing.T) {
+		sendFunc := SendFunction(config)
+		invalidFields := cty.StringVal("not-a-map")
+
+		_, err := sendFunc.Call([]cty.Value{ctxValue, subscriberValue, topicValue, testCtyValue, invalidFields})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "fields must be an object or map")
 	})
 }

@@ -22,6 +22,11 @@ function "circle_area" {
     result = pi * r * r
 }
 
+jq "functionname" {
+    params = [r]
+    query = "{.name}"
+}
+
 subscription "test1" {
     bus = bus.main
     topics = ["test/tick"]
@@ -30,12 +35,15 @@ subscription "test1" {
 
 # New functions:
 
+# diff(a, b)
+#    return a map for patching a to match b
 # log_debug("message", [any...])
 # log_error("message", [any...])
 # log_info("message", [any...])
 # log_level("level", "message", [any...])
 # log_warn("message", [any...])
-
+# patch(target, patch)
+#     apply the patch to the target and return the result
 # send(context, bus_or_subscriber, "topic", anything)
 #     send a message (anything) on a bus or directly to a subscriber
 # sendgo(context, bus_or_subscriber, "topic", anything)
@@ -43,3 +51,5 @@ subscription "test1" {
 #     when vinculum is embedded in a go program.
 # sendjson(context, bus_or_subscriber, "topic", anything)
 #     Like send(), but comverts message to JSON and sends that.
+# typeof(x)
+#     returns a string with the friendly name of the type of x 

@@ -6,11 +6,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
-	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/zclconf/go-cty/cty"
-	"github.com/zclconf/go-cty/cty/function"
-	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
 type BusDefinition struct {
@@ -181,89 +178,4 @@ func (h *BusBlockHandler) BuildEventBus(config *Config, busDef *BusDefinition, d
 	}
 
 	return nil
-}
-
-// MessageConverter defines how to convert a cty.Value message before sending
-type MessageConverter func(cty.Value) (any, error)
-
-// createSendFunction is a shared helper that creates send functions with different message converters
-func createSendFunction(config *Config, converter MessageConverter) function.Function {
-	return function.New(&function.Spec{
-		Params: []function.Parameter{
-			{
-				Name: "ctx",
-				Type: cty.DynamicPseudoType,
-			},
-			{
-				Name: "subscriber",
-				Type: cty.DynamicPseudoType, // TODO: subscriberType
-			},
-			{
-				Name: "topic",
-				Type: cty.String,
-			},
-			{
-				Name: "message",
-				Type: cty.DynamicPseudoType,
-			},
-		},
-		Type: function.StaticReturnType(cty.Bool),
-		Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
-			ctx, diags := GetContextFromObject(args[0])
-			if diags.HasErrors() {
-				return cty.False, fmt.Errorf("context error: %s", diags.Error())
-			}
-			subscriber, err := GetEventBusFromCapsule(args[1]) // TODO: subscriberType
-			if err != nil {
-				return cty.False, err
-			}
-			topic := args[2].AsString()
-			message := args[3]
-
-			// Convert the message using the provided converter
-			convertedMessage, err := converter(message)
-			if err != nil {
-				return cty.False, fmt.Errorf("failed to convert message: %w", err)
-			}
-
-			err = subscriber.Publish(ctx, topic, convertedMessage)
-			if err != nil {
-				return cty.False, fmt.Errorf("failed to send message: %w", err)
-			}
-
-			return cty.True, nil
-		},
-	})
-}
-
-// defaultMessageConverter passes the cty.Value through as-is (original behavior)
-func defaultMessageConverter(message cty.Value) (any, error) {
-	return message, nil
-}
-
-// jsonMessageConverter converts the cty.Value to JSON bytes
-func jsonMessageConverter(message cty.Value) (any, error) {
-	jsonBytes, err := ctyjson.Marshal(message, message.Type())
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cty value to JSON: %w", err)
-	}
-
-	return jsonBytes, nil
-}
-
-// SendFunction returns a cty function for sending a message to a bus subscriber (original behavior)
-func SendFunction(config *Config) function.Function {
-	return createSendFunction(config, defaultMessageConverter)
-}
-
-// SendJSONFunction returns a cty function for sending a JSON string message to a bus subscriber
-func SendJSONFunction(config *Config) function.Function {
-	return createSendFunction(config, jsonMessageConverter)
-}
-
-// SendGoFunction returns a cty function for sending a Go native type message to a bus subscriber
-func SendGoFunction(config *Config) function.Function {
-	return createSendFunction(config, func(message cty.Value) (any, error) {
-		return go2cty2go.CtyToAny(message)
-	})
 }
