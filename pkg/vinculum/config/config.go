@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/robfig/cron/v3"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/tsarna/vinculum/pkg/vinculum/config/functions"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	"go.uber.org/zap"
@@ -122,4 +125,40 @@ func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 	config.Logger.Info("Config built successfully")
 
 	return config, diags
+}
+
+// ExtractUserFunctions wraps the functions package ExtractUserFunctions
+func (c *Config) ExtractUserFunctions(bodies []hcl.Body) (map[string]function.Function, []hcl.Body, hcl.Diagnostics) {
+	return functions.ExtractUserFunctions(bodies, c.evalCtx)
+}
+
+// GetFunctions wraps the functions package and adds config-specific functions
+func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[string]function.Function, hcl.Diagnostics) {
+	funcs := functions.GetStandardLibraryFunctions()
+	diags := hcl.Diagnostics{}
+
+	for name, function := range functions.GetLogFunctions(c.Logger) {
+		funcs[name] = function
+	}
+
+	funcs["diff"] = functions.DiffFunc
+	funcs["patch"] = functions.PatchFunc
+	funcs["send"] = SendFunction(c)
+	funcs["sendjson"] = SendJSONFunction(c)
+	funcs["sendgo"] = SendGoFunction(c)
+	funcs["typeof"] = functions.TypeOfFunc
+
+	for name, function := range userFuncs {
+		if _, exists := funcs[name]; exists {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate function",
+				Detail:   fmt.Sprintf("Function %s is reserved and can't be overridden", name),
+			})
+			continue
+		}
+		funcs[name] = function
+	}
+
+	return funcs, diags
 }

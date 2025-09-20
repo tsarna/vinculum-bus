@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
+	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
@@ -240,14 +241,13 @@ func defaultMessageConverter(message cty.Value) (any, error) {
 	return message, nil
 }
 
-// jsonMessageConverter converts the cty.Value to []bytes of JSON
+// jsonMessageConverter converts the cty.Value to JSON bytes
 func jsonMessageConverter(message cty.Value) (any, error) {
-	// Convert cty.Value to JSON bytes first
 	jsonBytes, err := ctyjson.Marshal(message, message.Type())
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal cty value to JSON: %w", err)
 	}
-	// Return as string
+
 	return jsonBytes, nil
 }
 
@@ -264,6 +264,6 @@ func SendJSONFunction(config *Config) function.Function {
 // SendGoFunction returns a cty function for sending a Go native type message to a bus subscriber
 func SendGoFunction(config *Config) function.Function {
 	return createSendFunction(config, func(message cty.Value) (any, error) {
-		return CtyToAny(message)
+		return go2cty2go.CtyToAny(message)
 	})
 }

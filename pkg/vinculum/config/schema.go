@@ -26,6 +26,10 @@ var blockSchema = []hcl.BlockHeaderSchema{
 		LabelNames: []string{"name"},
 	},
 	{
+		Type:       "jq",
+		LabelNames: []string{"name"},
+	},
+	{
 		Type:       "subscription",
 		LabelNames: []string{"name"},
 	},

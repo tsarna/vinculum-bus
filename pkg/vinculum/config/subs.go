@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
+	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/zclconf/go-cty/cty"
 	"go.uber.org/zap"
@@ -83,7 +84,7 @@ type ActionSubscriber struct {
 }
 
 func (a *ActionSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
-	ctyMessage, err := AnyToCty(message)
+	ctyMessage, err := go2cty2go.AnyToCty(message)
 	if err != nil {
 		return err
 	}

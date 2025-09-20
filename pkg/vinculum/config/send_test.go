@@ -115,14 +115,14 @@ func TestSendFunctions(t *testing.T) {
 			return len(subscriber.messages) > 0
 		}, timeout, interval)
 
-		// The sendjson should convert to JSON string
+		// The sendjson should convert to JSON bytes
 		assert.Equal(t, "test/topic", subscriber.messages[0].topic)
-		jsonStr, ok := subscriber.messages[0].payload.(string)
-		require.True(t, ok, "Expected payload to be a JSON string")
+		jsonBytes, ok := subscriber.messages[0].payload.([]byte)
+		require.True(t, ok, "Expected payload to be JSON bytes")
 
 		// Verify it's valid JSON by unmarshaling
 		var unmarshaled any
-		err = json.Unmarshal([]byte(jsonStr), &unmarshaled)
+		err = json.Unmarshal(jsonBytes, &unmarshaled)
 		require.NoError(t, err)
 
 		// Verify the content matches our expected structure

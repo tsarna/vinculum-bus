@@ -1,15 +1,11 @@
-package config
+package functions
 
 import (
-	"fmt"
-
 	"github.com/hashicorp/go-cty-funcs/cidr"
 	"github.com/hashicorp/go-cty-funcs/crypto"
 	"github.com/hashicorp/go-cty-funcs/encoding"
 	"github.com/hashicorp/go-cty-funcs/filesystem"
 	"github.com/hashicorp/go-cty-funcs/uuid"
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/ext/userfunc"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	"github.com/zclconf/go-cty/cty/function/stdlib"
@@ -117,68 +113,4 @@ func GetStandardLibraryFunctions() map[string]function.Function {
 		"uuidv4": uuid.V4Func,
 		"uuidv5": uuid.V5Func,
 	}
-}
-
-func (c *Config) ExtractUserFunctions(bodies []hcl.Body) (map[string]function.Function, []hcl.Body, hcl.Diagnostics) {
-	var diags hcl.Diagnostics
-
-	remainingBodies := make([]hcl.Body, 0)
-	allFuncs := make(map[string]function.Function)
-
-	for _, body := range bodies {
-		funcs, remainingBody, funcdiags := userfunc.DecodeUserFunctions(body, "function", func() *hcl.EvalContext {
-			return c.evalCtx
-		})
-
-		diags = diags.Extend(funcdiags)
-		if diags.HasErrors() {
-			return nil, nil, diags
-		}
-
-		remainingBodies = append(remainingBodies, remainingBody)
-
-		for name, function := range funcs {
-			if _, exists := allFuncs[name]; exists {
-				diags = diags.Append(&hcl.Diagnostic{
-					Severity: hcl.DiagError,
-					Summary:  "Duplicate function",
-					Detail:   fmt.Sprintf("Function %s is already defined", name),
-				})
-			}
-			allFuncs[name] = function
-		}
-	}
-
-	if diags.HasErrors() {
-		return nil, nil, diags
-	}
-
-	return allFuncs, remainingBodies, diags
-}
-
-func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[string]function.Function, hcl.Diagnostics) {
-	funcs := GetStandardLibraryFunctions()
-	diags := hcl.Diagnostics{}
-
-	for name, function := range GetLogFunctions(c.Logger) {
-		funcs[name] = function
-	}
-
-	funcs["send"] = SendFunction(c)
-	funcs["sendjson"] = SendJSONFunction(c)
-	funcs["sendgo"] = SendGoFunction(c)
-
-	for name, function := range userFuncs {
-		if _, exists := funcs[name]; exists {
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Duplicate function",
-				Detail:   fmt.Sprintf("Function %s is reserved and can't be overridden", name),
-			})
-			continue
-		}
-		funcs[name] = function
-	}
-
-	return funcs, diags
 }
