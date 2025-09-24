@@ -18,15 +18,21 @@ type ConfigBuilder struct {
 	blockHandlers map[string]BlockHandler
 }
 
+type Startable interface {
+	Start() error
+}
+
 type Config struct {
 	Logger    *zap.Logger
 	Functions map[string]function.Function
 	Constants map[string]cty.Value
 	evalCtx   *hcl.EvalContext
 
+	Startables     []Startable
 	BusCapsuleType cty.Type
 	CtyBusMap      map[string]cty.Value
 	Buses          map[string]bus.EventBus
+	Servers        map[string]map[string]Server
 
 	Crons map[string]*cron.Cron
 }
@@ -81,6 +87,7 @@ func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 
 	// Add environment variables to the evaluation context
 	config.Constants["env"] = GetEnvObject()
+	config.Constants["httpstatus"] = getStatusCodeObject()
 
 	config.evalCtx = &hcl.EvalContext{
 		Functions: config.Functions,
@@ -161,4 +168,21 @@ func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[strin
 	}
 
 	return funcs, diags
+}
+
+type errorlessStartable interface {
+	Start()
+}
+
+func NewErrorlessStartable(startable errorlessStartable) Startable {
+	return &ErrorlessStartable{startable: startable}
+}
+
+type ErrorlessStartable struct {
+	startable errorlessStartable
+}
+
+func (e ErrorlessStartable) Start() error {
+	e.startable.Start()
+	return nil
 }

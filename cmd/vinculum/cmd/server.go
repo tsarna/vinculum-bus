@@ -67,8 +67,11 @@ func runServer(cmd *cobra.Command, args []string) error {
 	logSub := subutils.NewLoggingSubscriber(nil, cfg.Logger, zap.InfoLevel)
 	cfg.Buses["main"].Subscribe(context.Background(), logSub, "#")
 
-	for _, cron := range cfg.Crons {
-		cron.Start()
+	for _, startable := range cfg.Startables {
+		err := startable.Start()
+		if err != nil {
+			logger.Error("Failed to start component", zap.Error(err))
+		}
 	}
 
 	// For now, just wait indefinitely

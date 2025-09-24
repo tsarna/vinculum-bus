@@ -44,6 +44,7 @@ func GetBlockHandlers() map[string]BlockHandler {
 		"bus":          NewBusBlockHandler(),
 		"const":        NewConstBlockHandler(),
 		"cron":         NewCronBlockHandler(),
+		"server":       NewServerBlockHandler(),
 		"subscription": NewSubscriptionBlockHandler(),
 	}
 }

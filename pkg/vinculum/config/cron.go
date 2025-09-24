@@ -51,6 +51,7 @@ func (h *CronBlockHandler) Process(config *Config, block *hcl.Block) hcl.Diagnos
 	}
 
 	config.Crons[cronDef.Name] = cronObj
+	config.Startables = append(config.Startables, NewErrorlessStartable(cronObj))
 
 	return diags
 }

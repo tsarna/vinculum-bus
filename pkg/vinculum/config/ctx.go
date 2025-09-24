@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 )
 
 // ContextCapsuleType is a cty capsule type for wrapping Context instances
@@ -53,6 +54,7 @@ func GetContextFromCapsule(val cty.Value) (context.Context, hcl.Diagnostics) {
 type ContextObjectBuilder struct {
 	ctx        context.Context
 	attributes map[string]cty.Value
+	functions  map[string]function.Function
 }
 
 func NewContext(ctx context.Context) *ContextObjectBuilder {
@@ -68,8 +70,38 @@ func (b *ContextObjectBuilder) WithAttribute(name string, value cty.Value) *Cont
 	return b
 }
 
+func (b *ContextObjectBuilder) WithInt64Attribute(name string, value int64) *ContextObjectBuilder {
+	b.attributes[name] = cty.NumberIntVal(value)
+
+	return b
+}
+
+func (b *ContextObjectBuilder) WithUInt64Attribute(name string, value uint64) *ContextObjectBuilder {
+	b.attributes[name] = cty.NumberUIntVal(value)
+
+	return b
+}
+
 func (b *ContextObjectBuilder) WithStringAttribute(name string, value string) *ContextObjectBuilder {
 	b.attributes[name] = cty.StringVal(value)
+
+	return b
+}
+
+func (b *ContextObjectBuilder) WithFunction(name string, function function.Function) *ContextObjectBuilder {
+	b.functions[name] = function
+
+	return b
+}
+
+func (b *ContextObjectBuilder) WithFunctions(functions map[string]function.Function) *ContextObjectBuilder {
+	if b.functions == nil {
+		b.functions = functions
+	} else {
+		for name, function := range functions {
+			b.functions[name] = function
+		}
+	}
 
 	return b
 }
@@ -89,6 +121,7 @@ func (b *ContextObjectBuilder) BuildEvalContext(parent *hcl.EvalContext) (*hcl.E
 
 	evalCtx.Variables = make(map[string]cty.Value)
 	evalCtx.Variables["ctx"] = ctxObj
+	evalCtx.Functions = b.functions
 
 	return evalCtx, diags
 }

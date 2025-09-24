@@ -44,12 +44,13 @@ subscription "test1" {
 # log_warn("message", [any...])
 # patch(target, patch)
 #     apply the patch to the target and return the result
-# send(context, bus_or_subscriber, "topic", anything)
-#     send a message (anything) on a bus or directly to a subscriber
-# sendgo(context, bus_or_subscriber, "topic", anything)
+# send(context, bus_or_subscriber, "topic", anything, [fields])
+#     send a message (anything) on a bus or directly to a subscriber. If supplied, fields
+#     should be a map of strings to strings
+# sendgo(context, bus_or_subscriber, "topic", anything, [fields])
 #     Like send(), but sends message as Go primitive objects. This could be of use
 #     when vinculum is embedded in a go program.
-# sendjson(context, bus_or_subscriber, "topic", anything)
+# sendjson(context, bus_or_subscriber, "topic", anything, [fields])
 #     Like send(), but comverts message to JSON and sends that.
 # typeof(x)
 #     returns a string with the friendly name of the type of x 
