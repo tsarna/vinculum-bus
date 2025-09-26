@@ -51,8 +51,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		zap.String("log-level", logLevel),
 	)
 
-	logger.Info("Server startup complete (placeholder implementation)")
-
 	cfg, diags := config.NewConfig().
 		WithLogger(logger).
 		WithSources(stringSliceToAnySlice(args)...).

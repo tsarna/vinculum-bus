@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
+	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
@@ -16,11 +17,14 @@ import (
 )
 
 type SubscriptionDefinition struct {
-	Name    string         `hcl:",label"`
-	BusExpr hcl.Expression `hcl:"bus,optional"`
-	Topics  []string       `hcl:"topics"`
-	// QueueSize  *int                  `hcl:"queue_size,optional"`
+	Name       string         `hcl:",label"`
+	BusExpr    hcl.Expression `hcl:"bus,optional"`
+	Topics     []string       `hcl:"topics"`
+	QueueSize  *int           `hcl:"queue_size,optional"`
+	Transforms hcl.Expression `hcl:"transforms,optional"`
+	Subscriber hcl.Expression `hcl:"subscriber,optional"`
 	ActionExpr hcl.Expression `hcl:"action,optional"`
+	Disabled   bool           `hcl:"disabled,optional"`
 }
 
 type SubscriptionBlockHandler struct {
@@ -42,23 +46,63 @@ func (h *SubscriptionBlockHandler) Process(config *Config, block *hcl.Block) hcl
 		return diags
 	}
 
+	if subscriptionDef.Disabled {
+		return nil
+	}
+
 	// Manually set the name from the block label since DecodeBody doesn't handle labels
 	if len(block.Labels) > 0 {
 		subscriptionDef.Name = block.Labels[0]
 	}
 
-	bus, diags := GetEventBusFromExpression(config, subscriptionDef.BusExpr)
+	eventBus, diags := GetEventBusFromExpression(config, subscriptionDef.BusExpr)
 	if diags.HasErrors() {
 		return diags
 	}
 
-	subscriber, diags := CreateSubscriber(config, &subscriptionDef)
-	if diags.HasErrors() {
-		return diags
+	// Check if expressions are actually present (not just empty HCL expressions)
+	hasSubscriber := IsExpressionProvided(subscriptionDef.Subscriber)
+	hasAction := IsExpressionProvided(subscriptionDef.ActionExpr)
+
+	if hasSubscriber && hasAction || !hasSubscriber && !hasAction {
+		return hcl.Diagnostics{
+			&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Exactly one of subscriber or action must be specified",
+				Subject:  &block.DefRange,
+			},
+		}
+	}
+
+	var subscriber bus.Subscriber
+
+	if hasSubscriber {
+		subscriber, diags = GetSubscriberFromExpression(config, subscriptionDef.Subscriber)
+		if diags.HasErrors() {
+			return diags
+		}
+	} else {
+		subscriber, diags = CreateActionSubscriber(config, &subscriptionDef)
+		if diags.HasErrors() {
+			return diags
+		}
+	}
+
+	if IsExpressionProvided(subscriptionDef.Transforms) {
+		transforms, diags := config.GetMessageTransforms(subscriptionDef.Transforms)
+		if diags.HasErrors() {
+			return diags
+		}
+
+		subscriber = subutils.NewTransformingSubscriber(subscriber, transforms...)
+	}
+
+	if subscriptionDef.QueueSize != nil {
+		subscriber = subutils.NewAsyncQueueingSubscriber(subscriber, *subscriptionDef.QueueSize)
 	}
 
 	for _, topic := range subscriptionDef.Topics {
-		err := bus.Subscribe(context.Background(), subscriber, topic) // TODO: context for otel
+		err := eventBus.Subscribe(context.Background(), subscriber, topic) // TODO: context for otel
 		if err != nil {
 			diags = diags.Append(
 				&hcl.Diagnostic{
@@ -73,7 +117,7 @@ func (h *SubscriptionBlockHandler) Process(config *Config, block *hcl.Block) hcl
 	return diags
 }
 
-func CreateSubscriber(config *Config, subscriptionDef *SubscriptionDefinition) (bus.Subscriber, hcl.Diagnostics) {
+func CreateActionSubscriber(config *Config, subscriptionDef *SubscriptionDefinition) (bus.Subscriber, hcl.Diagnostics) {
 	config.Logger.Info("CreateSubscriber called", zap.String("subscription", subscriptionDef.Name))
 	return &ActionSubscriber{
 		Config:     config,

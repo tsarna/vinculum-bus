@@ -6,31 +6,49 @@ import (
 	"github.com/tsarna/go-structdiff"
 )
 
-// DiffTransform is a SimpleMessageTransformFunc that generates structural diffs between "old" and "new" values.
+// DiffTransform returns a SimpleMessageTransformFunc that generates structural diffs
+// between values at the specified keys.
 //
-// This transform looks for message payloads that are maps containing both "old" and "new" keys.
-// When found, it uses go-structdiff to compute the differences between the old and new values.
+// This function allows you to specify which keys to compare, making it flexible
+// for different payload structures.
+//
+// Parameters:
+//   - oldKey: The key containing the "before" value
+//   - newKey: The key containing the "after" value
 //
 // Behavior depends on the payload structure:
 //
-// 1. Map with exactly "old" and "new" keys:
+// 1. Map with exactly the two specified keys:
 //   - Replaces the entire payload with the diff result
 //
-// 2. Map with "old" and "new" keys plus additional keys:
-//   - Creates a copy of the map with "old" and "new" removed
+// 2. Map with the two specified keys plus additional keys:
+//   - Creates a copy of the map with the specified keys removed
 //   - Adds a "delta" key containing the structural differences
 //   - Preserves all other keys and their values
 //
-// Example 1 - Simple diff (exactly old/new):
+// Example usage:
 //
-//	Input:  map[string]any{"old": {...}, "new": {...}}
+//	// Create a transform that diffs "old" and "new" keys (classic usage)
+//	oldNewDiff := DiffTransform("old", "new")
+//
+//	// Create a transform that diffs "before" and "after" keys
+//	beforeAfterDiff := DiffTransform("before", "after")
+//
+//	// Use in a transform pipeline
+//	transforms := []MessageTransformFunc{
+//	    TransformOnPattern("audit/+/changes", beforeAfterDiff),
+//	}
+//
+// Example 1 - Simple diff (exactly two keys):
+//
+//	Input:  map[string]any{"before": {...}, "after": {...}}
 //	Output: map[string]any{"age": 31, "city": "Boston"}  // the diff
 //
-// Example 2 - Extended diff (old/new + metadata):
+// Example 2 - Extended diff (two keys + metadata):
 //
 //	Input:  map[string]any{
-//	    "old": map[string]any{"name": "John", "age": 30},
-//	    "new": map[string]any{"name": "John", "age": 31},
+//	    "before": map[string]any{"name": "John", "age": 30},
+//	    "after": map[string]any{"name": "John", "age": 31},
 //	    "timestamp": "2024-01-01T00:00:00Z",
 //	    "user_id": "123",
 //	}
@@ -48,46 +66,48 @@ import (
 //   - Efficient delta synchronization
 //   - Event sourcing with state changes
 //   - Reducing payload size for incremental updates
-func DiffTransform(ctx context.Context, payload any, fields map[string]string) any {
-	// Check if payload is a map
-	payloadMap, ok := payload.(map[string]any)
-	if !ok {
-		return payload // Not a map, pass through
-	}
-
-	// Check if map contains required "old" and "new" keys
-	oldValue, hasOld := payloadMap["old"]
-	newValue, hasNew := payloadMap["new"]
-	if !hasOld || !hasNew {
-		return payload // Missing required keys, pass through
-	}
-
-	// Determine if this is a simple diff (exactly old/new) or extended diff (old/new + metadata)
-	isSimpleDiff := len(payloadMap) == 2
-
-	diff, err := structdiff.Diff(oldValue, newValue)
-	if err != nil {
-		// If diff computation failed, pass through original payload
-		return payload
-	}
-
-	if isSimpleDiff {
-		// Simple case: replace entire payload with the diff
-		return diff
-	} else {
-		// Extended case: preserve other keys and add "diff" key
-		newPayload := make(map[string]any)
-
-		// Copy all keys except "old" and "new"
-		for key, value := range payloadMap {
-			if key != "old" && key != "new" {
-				newPayload[key] = value
-			}
+func DiffTransform(oldKey, newKey string) SimpleMessageTransformFunc {
+	return func(ctx context.Context, payload any, fields map[string]string) any {
+		// Check if payload is a map
+		payloadMap, ok := payload.(map[string]any)
+		if !ok {
+			return payload // Not a map, pass through
 		}
 
-		// Add the diff
-		newPayload["delta"] = diff
+		// Check if map contains required keys
+		oldValue, hasOld := payloadMap[oldKey]
+		newValue, hasNew := payloadMap[newKey]
+		if !hasOld || !hasNew {
+			return payload // Missing required keys, pass through
+		}
 
-		return newPayload
+		// Determine if this is a simple diff (exactly the two keys) or extended diff (keys + metadata)
+		isSimpleDiff := len(payloadMap) == 2
+
+		diff, err := structdiff.Diff(oldValue, newValue)
+		if err != nil {
+			// If diff computation failed, pass through original payload
+			return payload
+		}
+
+		if isSimpleDiff {
+			// Simple case: replace entire payload with the diff
+			return diff
+		} else {
+			// Extended case: preserve other keys and add "delta" key
+			newPayload := make(map[string]any)
+
+			// Copy all keys except the specified old and new keys
+			for key, value := range payloadMap {
+				if key != oldKey && key != newKey {
+					newPayload[key] = value
+				}
+			}
+
+			// Add the diff
+			newPayload["delta"] = diff
+
+			return newPayload
+		}
 	}
 }

@@ -8,7 +8,8 @@ import (
 )
 
 func TestDiffTransform(t *testing.T) {
-	transform := ModifyPayload(DiffTransform)
+	// Test DiffTransform with classic "old" and "new" keys
+	transform := ModifyPayload(DiffTransform("old", "new"))
 
 	t.Run("simple diff with exactly old and new keys", func(t *testing.T) {
 		oldValue := map[string]any{
@@ -354,5 +355,242 @@ func TestDiffTransform(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.Equal(t, "preserve/test", result.Topic)
 		assert.NotEqual(t, msg.Payload, result.Payload) // Payload should be different (the diff)
+	})
+}
+
+func TestDiffTransformWithCustomKeys(t *testing.T) {
+	t.Run("custom keys - before and after", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("before", "after"))
+
+		oldValue := map[string]any{
+			"name": "John",
+			"age":  30,
+			"city": "NYC",
+		}
+		newValue := map[string]any{
+			"name": "John",
+			"age":  31,
+			"city": "Boston",
+		}
+
+		msg := &bus.EventBusMessage{
+			Topic: "user/update",
+			Payload: map[string]any{
+				"before": oldValue,
+				"after":  newValue,
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+		assert.Equal(t, "user/update", result.Topic)
+
+		// Simple case: entire payload should be replaced with the diff
+		diffMap, ok := result.Payload.(map[string]any)
+		assert.True(t, ok)
+		assert.Equal(t, 31, diffMap["age"])
+		assert.Equal(t, "Boston", diffMap["city"])
+		assert.NotContains(t, diffMap, "name") // name didn't change
+
+		// Should not contain before, after, or delta keys since this is the simple case
+		assert.NotContains(t, diffMap, "before")
+		assert.NotContains(t, diffMap, "after")
+		assert.NotContains(t, diffMap, "delta")
+	})
+
+	t.Run("custom keys - previous and current", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("previous", "current"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "state/change",
+			Payload: map[string]any{
+				"previous": map[string]any{"status": "pending", "count": 5},
+				"current":  map[string]any{"status": "active", "count": 10},
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+
+		diffMap, ok := result.Payload.(map[string]any)
+		assert.True(t, ok)
+		assert.Equal(t, "active", diffMap["status"])
+		assert.Equal(t, 10, diffMap["count"])
+	})
+
+	t.Run("custom keys with extended diff", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("source", "target"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "migration/data",
+			Payload: map[string]any{
+				"source": map[string]any{
+					"version": "1.0",
+					"config":  map[string]any{"debug": false, "timeout": 30},
+				},
+				"target": map[string]any{
+					"version": "2.0",
+					"config":  map[string]any{"debug": true, "timeout": 60},
+				},
+				"migration_id": "mig-123",
+				"timestamp":    "2024-01-01T00:00:00Z",
+				"environment":  "production",
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+
+		resultMap, ok := result.Payload.(map[string]any)
+		assert.True(t, ok)
+
+		// Check that metadata is preserved
+		assert.Equal(t, "mig-123", resultMap["migration_id"])
+		assert.Equal(t, "2024-01-01T00:00:00Z", resultMap["timestamp"])
+		assert.Equal(t, "production", resultMap["environment"])
+
+		// Check that source and target are removed
+		assert.NotContains(t, resultMap, "source")
+		assert.NotContains(t, resultMap, "target")
+
+		// Check that diff is present and contains changes
+		diff, exists := resultMap["delta"]
+		assert.True(t, exists)
+		diffMap, ok := diff.(map[string]any)
+		assert.True(t, ok)
+		assert.Equal(t, "2.0", diffMap["version"])
+		assert.Contains(t, diffMap, "config")
+	})
+
+	t.Run("custom keys - pass through when missing keys", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("from", "to"))
+
+		testCases := []map[string]any{
+			{
+				"from":  "value1",
+				"other": "value2",
+			},
+			{
+				"to":    "value1",
+				"other": "value2",
+			},
+			{
+				"wrong": "value1",
+				"keys":  "value2",
+			},
+			{
+				"old": "value1", // Has old/new but we're looking for from/to
+				"new": "value2",
+			},
+		}
+
+		for i, payload := range testCases {
+			msg := &bus.EventBusMessage{
+				Topic:   "test/topic",
+				Payload: payload,
+			}
+
+			result, cont := transform(msg)
+			assert.True(t, cont, "test case %d", i)
+			assert.Equal(t, msg, result, "test case %d should be unchanged", i)
+		}
+	})
+
+	t.Run("classic old/new keys work correctly", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("old", "new"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "compatibility/test",
+			Payload: map[string]any{
+				"old":      map[string]any{"value": 1, "name": "test"},
+				"new":      map[string]any{"value": 2, "name": "test"},
+				"metadata": map[string]any{"source": "api"},
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+
+		resultMap, ok := result.Payload.(map[string]any)
+		assert.True(t, ok)
+
+		// Should preserve metadata
+		assert.Equal(t, map[string]any{"source": "api"}, resultMap["metadata"])
+
+		// Should have delta with the changes
+		delta, exists := resultMap["delta"]
+		assert.True(t, exists)
+		deltaMap, ok := delta.(map[string]any)
+		assert.True(t, ok)
+		assert.Equal(t, 2, deltaMap["value"])
+		assert.NotContains(t, deltaMap, "name") // name didn't change
+	})
+
+	t.Run("custom keys - edge case with same key names", func(t *testing.T) {
+		// Test edge case where someone uses the same key for both old and new
+		transform := ModifyPayload(DiffTransform("data", "data"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "edge/case",
+			Payload: map[string]any{
+				"data": map[string]any{"value": 42},
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+
+		// When using the same key for both old and new, it will diff the value with itself
+		// This results in an empty diff (no changes) in the delta key
+		resultMap, ok := result.Payload.(map[string]any)
+		assert.True(t, ok)
+
+		// Should have a delta key with empty diff (since diffing same value with itself)
+		delta, exists := resultMap["delta"]
+		assert.True(t, exists)
+		deltaMap, ok := delta.(map[string]any)
+		assert.True(t, ok)
+		assert.Empty(t, deltaMap) // Should be empty since no changes
+	})
+
+	t.Run("custom keys - non-string keys", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("v1", "v2"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "version/diff",
+			Payload: map[string]any{
+				"v1": 100,
+				"v2": 200,
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+
+		// Should create a diff even for non-map values
+		assert.NotEqual(t, msg.Payload, result.Payload)
+	})
+
+	t.Run("custom keys - empty string keys", func(t *testing.T) {
+		transform := ModifyPayload(DiffTransform("", "new"))
+
+		msg := &bus.EventBusMessage{
+			Topic: "empty/key",
+			Payload: map[string]any{
+				"":    "old_value",
+				"new": "new_value",
+			},
+		}
+
+		result, cont := transform(msg)
+		assert.True(t, cont)
+		assert.NotNil(t, result)
+		// Should work with empty string as key
+		assert.NotEqual(t, msg.Payload, result.Payload)
 	})
 }

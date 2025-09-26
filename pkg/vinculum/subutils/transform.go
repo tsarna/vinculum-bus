@@ -70,13 +70,13 @@ func (t *TransformingSubscriber) OnEvent(ctx context.Context, topic string, mess
 
 	// Apply transforms in order
 	current := eventMsg
-	for _, transform := range t.transforms {
+	for _, transformFunc := range t.transforms {
 		if current == nil {
 			// Previous transform dropped the message, stop processing
 			return nil
 		}
 
-		transformed, continueProcessing := transform(current)
+		transformed, continueProcessing := transformFunc(current)
 		current = transformed
 
 		if !continueProcessing {

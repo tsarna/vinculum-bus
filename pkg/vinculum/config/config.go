@@ -186,3 +186,11 @@ func (e ErrorlessStartable) Start() error {
 	e.startable.Start()
 	return nil
 }
+
+// IsExpressionProvided checks if an HCL expression was actually provided in the configuration.
+// HCL creates empty expression objects for optional fields that aren't specified,
+// but empty expressions have Start.Byte == End.Byte (zero-length range).
+// Real expressions have End.Byte > Start.Byte (non-zero length range).
+func IsExpressionProvided(expr hcl.Expression) bool {
+	return expr != nil && expr.Range().End.Byte > expr.Range().Start.Byte
+}

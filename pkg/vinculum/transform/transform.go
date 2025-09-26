@@ -225,6 +225,25 @@ func IfPattern(pattern string, transform MessageTransformFunc) MessageTransformF
 	}
 }
 
+// IfPrefix a MessageTransformFunc that applies a transform only if the topic
+// starts with the given prefix. If the prefix doesn't match, the message
+// passes through unchanged.
+//
+// Example:
+//
+//	// Only add prefix to sensor messages
+//	transforms := []MessageTransformFunc{
+//	    IfPrefix("sensor/", AddTopicPrefix("processed/")),
+//	}
+func IfPrefix(prefix string, transform MessageTransformFunc) MessageTransformFunc {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		if strings.HasPrefix(msg.Topic, prefix) {
+			return transform(msg)
+		}
+		return msg, true // Pass through unchanged if prefix doesn't match
+	}
+}
+
 // IfElsePattern returns a MessageTransformFunc that applies one transform if the topic
 // matches the given MQTT-style pattern, or another transform if it doesn't match.
 //
@@ -239,6 +258,26 @@ func IfPattern(pattern string, transform MessageTransformFunc) MessageTransformF
 func IfElsePattern(pattern string, ifTransform, elseTransform MessageTransformFunc) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		if mqttpattern.Matches(pattern, msg.Topic) {
+			return ifTransform(msg)
+		}
+		return elseTransform(msg)
+	}
+}
+
+// IfElsePrefix returns a MessageTransformFunc that applies one transform if the topic
+// starts with the given prefix, or another transform if it doesn't.
+//
+// Example:
+//
+//	// Add different prefixes based on topic prefix
+//	transforms := []MessageTransformFunc{
+//	    IfElsePrefix("sensor/",
+//	        AddTopicPrefix("sensor-processed/"),
+//	        AddTopicPrefix("other-processed/")),
+//	}
+func IfElsePrefix(prefix string, ifTransform, elseTransform MessageTransformFunc) MessageTransformFunc {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		if strings.HasPrefix(msg.Topic, prefix) {
 			return ifTransform(msg)
 		}
 		return elseTransform(msg)
@@ -281,5 +320,19 @@ func ModifyPayload(transform SimpleMessageTransformFunc) MessageTransformFunc {
 		}
 
 		return modified, true
+	}
+}
+
+// StopTransforms returns a MessageTransformFunc that stops the transform pipeline.
+// This is useful inside a chain or with the if or if_else transforms.
+//
+// Example:
+//
+//	transforms := []MessageTransformFunc{
+//	    StopTransforms(),
+//	}
+func StopTransforms() MessageTransformFunc {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		return nil, false
 	}
 }
