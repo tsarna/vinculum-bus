@@ -31,6 +31,7 @@ type Config struct {
 	evalCtx   *hcl.EvalContext
 	BaseDir   string
 
+	SigActions     *SignalActionHandler
 	Startables     []Startable
 	BusCapsuleType cty.Type
 	CtyBusMap      map[string]cty.Value
@@ -68,6 +69,7 @@ func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 		Logger:       cb.logger,
 		BaseDir:      cb.baseDir,
 		Constants:    make(map[string]cty.Value),
+		SigActions:   NewSignalActionHandler(cb.logger),
 		Buses:        make(map[string]bus.EventBus),
 		CtyBusMap:    make(map[string]cty.Value),
 		Servers:      make(map[string]map[string]Server),

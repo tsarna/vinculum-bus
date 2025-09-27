@@ -18,6 +18,7 @@ import (
 
 type HttpServer struct {
 	BaseServer
+	Logger *zap.Logger
 	Server *http.Server
 }
 
@@ -134,6 +135,7 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 	}
 
 	server := &HttpServer{
+		Logger: config.Logger,
 		BaseServer: BaseServer{
 			Name:     block.Labels[1],
 			DefRange: serverDef.DefRange,
@@ -150,7 +152,15 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 }
 
 func (h *HttpServer) Start() error {
-	return h.Server.ListenAndServe()
+	go func() {
+		h.Logger.Info("Starting HTTP server", zap.String("name", h.Name), zap.String("addr", h.Server.Addr))
+		err := h.Server.ListenAndServe()
+		if err != nil {
+			h.Logger.Error("Failed to start HTTP server", zap.String("name", h.Name), zap.Error(err))
+		}
+	}()
+
+	return nil
 }
 
 type loggingMiddleware struct {

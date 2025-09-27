@@ -45,6 +45,7 @@ func GetBlockHandlers() map[string]BlockHandler {
 		"const":        NewConstBlockHandler(),
 		"cron":         NewCronBlockHandler(),
 		"server":       NewServerBlockHandler(),
+		"signals":      NewSignalsBlockHandler(),
 		"subscription": NewSubscriptionBlockHandler(),
 	}
 }
