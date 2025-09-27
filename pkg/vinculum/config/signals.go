@@ -18,6 +18,7 @@ type SignalsDefinition struct {
 	SigInfo  hcl.Expression `hcl:"SIGINFO,optional"`
 	SigUsr1  hcl.Expression `hcl:"SIGUSR1,optional"`
 	SigUsr2  hcl.Expression `hcl:"SIGUSR2,optional"`
+	Disabled bool           `hcl:"disabled,optional"`
 	DefRange hcl.Range      `hcl:",def_range"`
 }
 
@@ -57,6 +58,10 @@ func (h *SignalsBlockHandler) Process(config *Config, block *hcl.Block) hcl.Diag
 	diags = diags.Extend(gohcl.DecodeBody(block.Body, config.evalCtx, &signalsDef))
 	if diags.HasErrors() {
 		return diags
+	}
+
+	if signalsDef.Disabled {
+		return nil
 	}
 
 	diags = diags.Extend(config.SetSignalAction("SIGHUP", signalsDef.SigHup))
