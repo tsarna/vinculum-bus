@@ -146,6 +146,9 @@ func (c *Connection) messageReader() {
 				c.logger.Debug("WebSocket connection closed by client",
 					zap.Int("close_status", int(closeStatus)),
 				)
+			} else if c.ctx.Err() != nil {
+				// Context cancelled (server shutdown, etc.) - expected
+				c.logger.Debug("WebSocket connection closed due to context cancellation", zap.Error(err))
 			} else {
 				// Read error (network issue, etc.)
 				c.logger.Error("Failed to read WebSocket message", zap.Error(err))

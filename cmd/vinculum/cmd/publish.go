@@ -53,7 +53,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	topic := args[1]
 	messageStr := args[2]
 
-	logger.Info("Publishing message",
+	logger.Debug("Publishing message",
 		zap.String("url", wsURL),
 		zap.String("topic", topic),
 		zap.Any("message", messageStr),
@@ -72,32 +72,33 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		WithDialTimeout(publishDialTimeout).
 		Build()
 	if err != nil {
-		return fmt.Errorf("failed to create WebSocket client: %w", err)
+		logger.Error("failed to create WebSocket client", zap.Error(err))
+		return nil
 	}
 
 	// Connect to WebSocket server
 	if err := wsClient.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect to WebSocket server: %w", err)
+		logger.Error("failed to connect to WebSocket server", zap.Error(err))
+		return nil
 	}
+
 	defer func() {
 		if disconnectErr := wsClient.Disconnect(); disconnectErr != nil {
 			logger.Warn("Error during client disconnect", zap.Error(disconnectErr))
 		}
 	}()
 
-	logger.Info("Connected to WebSocket server", zap.String("url", wsURL))
+	logger.Debug("Connected to WebSocket server", zap.String("url", wsURL))
 
 	// Publish the message
 	if err := wsClient.PublishSync(ctx, topic, messageStr); err != nil {
-		return fmt.Errorf("failed to publish message: %w", err)
+		logger.Error("failed to publish message", zap.Error(err))
+	} else {
+		logger.Debug("Message published successfully",
+			zap.String("topic", topic),
+			zap.Any("message", messageStr),
+		)
 	}
-
-	wsClient.UnsubscribeAll(ctx) // We'll wait for this to return, thus we know the message was delivered
-
-	logger.Info("Message published successfully",
-		zap.String("topic", topic),
-		zap.Any("message", messageStr),
-	)
 
 	return nil
 }

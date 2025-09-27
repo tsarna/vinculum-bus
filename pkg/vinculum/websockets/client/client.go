@@ -24,9 +24,9 @@ type Client struct {
 	dialTimeout      time.Duration
 	subscriber       bus.Subscriber
 	writeChannelSize int
-	authProvider     AuthorizationProvider  // Authorization provider
-	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
-	monitor          bus.ClientMonitor // Optional monitor for client events
+	authProvider     AuthorizationProvider // Authorization provider
+	headers          map[string][]string   // Custom HTTP headers for WebSocket handshake
+	monitor          bus.ClientMonitor     // Optional monitor for client events
 
 	// Connection state
 	conn     *websocket.Conn
@@ -117,7 +117,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.mu.Unlock()
 
-	c.logger.Info("WebSocket client connected", zap.String("url", c.url))
+	c.logger.Debug("WebSocket client connected", zap.String("url", c.url))
 
 	// Notify monitor of successful connection
 	if c.monitor != nil {
@@ -137,12 +137,12 @@ func (c *Client) Disconnect() error {
 		return nil // Already stopping
 	}
 
-	c.logger.Info("Disconnecting WebSocket client")
+	c.logger.Debug("Disconnecting WebSocket client")
 
 	// Use common cleanup logic
 	c.cleanup()
 
-	c.logger.Info("WebSocket client disconnected")
+	c.logger.Debug("WebSocket client disconnected")
 
 	// Notify monitor of graceful disconnect (no error)
 	if c.monitor != nil {
@@ -159,18 +159,18 @@ func (c *Client) cleanup() {
 
 // cleanupWithStatus performs cleanup with a specific close status
 func (c *Client) cleanupWithStatus(status websocket.StatusCode, reason string) {
-	// Cancel context to signal shutdown
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	// Close connection
+	// Close connection first to send proper close frame
 	c.mu.Lock()
 	if c.conn != nil {
 		c.conn.Close(status, reason)
 		c.conn = nil
 	}
 	c.mu.Unlock()
+
+	// Cancel context to signal shutdown to goroutines
+	if c.cancel != nil {
+		c.cancel()
+	}
 
 	// Wait for goroutines to finish
 	if c.done != nil {
@@ -295,7 +295,18 @@ func (c *Client) Publish(ctx context.Context, topic string, payload any) error {
 
 // PublishSync implements Client.PublishSync - same as Publish for WebSocket client
 func (c *Client) PublishSync(ctx context.Context, topic string, payload any) error {
-	return c.Publish(ctx, topic, payload)
+	if atomic.LoadInt32(&c.started) == 0 {
+		return fmt.Errorf("client is not connected")
+	}
+
+	msg := websockets.WireMessage{
+		Kind:  websockets.MessageKindEvent,
+		Topic: topic,
+		Data:  payload,
+		Id:    c.nextMessageID(),
+	}
+
+	return c.sendMessage(ctx, msg)
 }
 
 // Subscriber interface implementation - delegate to the configured subscriber
@@ -418,7 +429,17 @@ func (c *Client) readLoop() {
 
 		_, data, err := conn.Read(c.ctx)
 		if err != nil {
-			if c.ctx.Err() == nil {
+			closeStatus := websocket.CloseStatus(err)
+			if closeStatus != -1 {
+				// WebSocket closed with a close frame
+				c.logger.Debug("WebSocket connection closed by server",
+					zap.Int("close_status", int(closeStatus)),
+				)
+			} else if c.ctx.Err() != nil {
+				// Context cancelled (client shutdown, etc.) - expected
+				c.logger.Debug("WebSocket connection closed due to context cancellation", zap.Error(err))
+			} else {
+				// Unexpected read error (network issue, etc.)
 				c.logger.Error("Failed to read from WebSocket", zap.Error(err))
 				c.notifyDisconnectError(err)
 			}
@@ -445,7 +466,17 @@ func (c *Client) writeLoop() {
 			return
 		case data := <-c.writeChannel:
 			if err := conn.Write(c.ctx, websocket.MessageText, data); err != nil {
-				if c.ctx.Err() == nil {
+				closeStatus := websocket.CloseStatus(err)
+				if closeStatus != -1 {
+					// WebSocket closed with a close frame
+					c.logger.Debug("WebSocket connection closed by server during write",
+						zap.Int("close_status", int(closeStatus)),
+					)
+				} else if c.ctx.Err() != nil {
+					// Context cancelled (client shutdown, etc.) - expected
+					c.logger.Debug("WebSocket write failed due to context cancellation", zap.Error(err))
+				} else {
+					// Unexpected write error (network issue, etc.)
 					c.logger.Error("Failed to write to WebSocket", zap.Error(err))
 					c.notifyDisconnectError(err)
 				}
