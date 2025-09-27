@@ -17,9 +17,8 @@ import (
 )
 
 type HttpServer struct {
-	Name     string
-	DefRange hcl.Range
-	Server   *http.Server
+	BaseServer
+	Server *http.Server
 }
 
 type HttpServerDefinition struct {
@@ -27,6 +26,7 @@ type HttpServerDefinition struct {
 	DefRange    hcl.Range               `hcl:",def_range"`
 	StaticFiles []staticFilesDefinition `hcl:"files,block"`
 	Handlers    []handlerDefinition     `hcl:"handle,block"`
+	WebSockets  []websocketDefinition   `hcl:"websocket,block"`
 }
 
 type staticFilesDefinition struct {
@@ -43,11 +43,18 @@ type handlerDefinition struct {
 	DefRange hcl.Range      `hcl:",def_range"`
 }
 
-func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.Body) hcl.Diagnostics {
+type websocketDefinition struct {
+	UrlPath  string         `hcl:"urlpath,label"`
+	Server   hcl.Expression `hcl:"server"`
+	Disabled bool           `hcl:"disabled,optional"`
+	DefRange hcl.Range      `hcl:",def_range"`
+}
+
+func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.Body) (Server, hcl.Diagnostics) {
 	serverDef := HttpServerDefinition{}
 	diags := gohcl.DecodeBody(remainingBody, config.evalCtx, &serverDef)
 	if diags.HasErrors() {
-		return diags
+		return nil, diags
 	}
 
 	httpServers, ok := config.Servers["http"]
@@ -58,7 +65,7 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 
 	existing, ok := httpServers[block.Labels[1]]
 	if ok {
-		return hcl.Diagnostics{
+		return nil, hcl.Diagnostics{
 			&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Http server already defined",
@@ -76,7 +83,7 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 		}
 
 		if strings.Contains(file.UrlPath, " ") {
-			return hcl.Diagnostics{
+			return nil, hcl.Diagnostics{
 				&hcl.Diagnostic{
 					Severity: hcl.DiagError,
 					Summary:  "Invalid URL path",
@@ -100,27 +107,46 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 		mux.Handle(handler.Route, NewLoggingMiddleware(config.Logger, &httpAction{config: config, actionExpr: handler.Action}))
 	}
 
+	for _, websocket := range serverDef.WebSockets {
+		if websocket.Disabled {
+			continue
+		}
+
+		cfgServer, diags := GetServerFromExpression(config, websocket.Server)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		wsServer, ok := cfgServer.(WebsocketServer)
+		if !ok {
+			return nil, hcl.Diagnostics{
+				&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Sserver is not a WebSocket server",
+					Subject:  &websocket.DefRange,
+				},
+			}
+		}
+
+		listener := wsServer.GetListener()
+
+		mux.Handle(websocket.UrlPath, NewLoggingMiddleware(config.Logger, listener))
+	}
+
 	server := &HttpServer{
-		Name:     block.Labels[1],
-		DefRange: serverDef.DefRange,
+		BaseServer: BaseServer{
+			Name:     block.Labels[1],
+			DefRange: serverDef.DefRange,
+		},
 		Server: &http.Server{
 			Addr:    serverDef.Listen,
 			Handler: mux,
 		},
 	}
 
-	config.Servers["http"][block.Labels[1]] = server
 	config.Startables = append(config.Startables, server)
 
-	return nil
-}
-
-func (h *HttpServer) GetName() string {
-	return h.Name
-}
-
-func (h *HttpServer) GetDefRange() hcl.Range {
-	return h.DefRange
+	return server, nil
 }
 
 func (h *HttpServer) Start() error {
@@ -386,7 +412,7 @@ func getStatusCodeObject() cty.Value {
 	for name, code := range statusCodes {
 		codes[name] = cty.NumberIntVal(int64(code))
 	}
-	codes["by_code"] = getStatusCodeMap()
+	codes["bycode"] = getStatusCodeMap()
 	return cty.ObjectVal(codes)
 }
 

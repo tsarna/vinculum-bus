@@ -61,17 +61,6 @@ func TestClientBuilder(t *testing.T) {
 		assert.Contains(t, err.Error(), "URL is required")
 	})
 
-	t.Run("build fails with missing subscriber", func(t *testing.T) {
-		_, err := NewClient().
-			WithURL("ws://localhost:8080/ws").
-			WithLogger(logger).
-			WithDialTimeout(10 * time.Second).
-			Build()
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "subscriber is required")
-	})
-
 	t.Run("build succeeds with default logger", func(t *testing.T) {
 		client, err := NewClient().
 			WithURL("ws://localhost:8080/ws").

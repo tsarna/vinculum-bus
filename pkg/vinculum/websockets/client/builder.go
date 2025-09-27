@@ -21,9 +21,9 @@ type ClientBuilder struct {
 	dialTimeout      time.Duration
 	subscriber       bus.Subscriber
 	writeChannelSize int
-	authProvider     AuthorizationProvider  // Authorization provider
-	headers          map[string][]string    // Custom HTTP headers for WebSocket handshake
-	monitor          bus.ClientMonitor // Optional monitor for client events
+	authProvider     AuthorizationProvider // Authorization provider
+	headers          map[string][]string   // Custom HTTP headers for WebSocket handshake
+	monitor          bus.ClientMonitor     // Optional monitor for client events
 }
 
 // NewClient creates a new WebSocket client builder.
@@ -128,6 +128,10 @@ func (b *ClientBuilder) Build() (*Client, error) {
 		return nil, err
 	}
 
+	if b.subscriber == nil {
+		b.subscriber = &bus.BaseSubscriber{}
+	}
+
 	client := &Client{
 		url:              b.url,
 		logger:           b.logger,
@@ -146,10 +150,6 @@ func (b *ClientBuilder) Build() (*Client, error) {
 func (b *ClientBuilder) IsValid() error {
 	if b.url == "" {
 		return fmt.Errorf("URL is required")
-	}
-
-	if b.subscriber == nil {
-		return fmt.Errorf("subscriber is required")
 	}
 
 	// Logger is optional - we provide a default nop logger

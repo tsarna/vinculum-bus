@@ -16,6 +16,6 @@ const {
 }
 
 assert "ws bus" {
-    condition = (bus.wsx != null)
+    condition = (bus.ws != null)
 }
 

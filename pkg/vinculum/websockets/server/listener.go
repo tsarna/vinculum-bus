@@ -47,7 +47,7 @@ func newListener(config *ListenerConfig) *Listener {
 	}
 }
 
-// ServeWebsocket handles incoming HTTP requests and upgrades them to WebSocket connections.
+// ServeHTTP handles incoming HTTP requests and upgrades them to WebSocket connections.
 // This method can be plugged directly into HTTP routers (e.g., chi, gorilla/mux, net/http).
 //
 // The method will:
@@ -58,8 +58,8 @@ func newListener(config *ListenerConfig) *Listener {
 // Usage example:
 //
 //	listener := NewListener(eventBus, logger)
-//	http.HandleFunc("/ws", listener.ServeWebsocket)
-func (l *Listener) ServeWebsocket(w http.ResponseWriter, r *http.Request) {
+//	http.Handle("/ws", listener.ServeWebsocket)
+func (l *Listener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Accept the WebSocket connection
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionContextTakeover,

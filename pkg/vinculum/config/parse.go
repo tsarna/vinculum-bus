@@ -21,9 +21,7 @@ func (cb *ConfigBuilder) GetBlocks(bodies []hcl.Body) (hcl.Blocks, hcl.Diagnosti
 		content, _, partialDiags := body.PartialContent(configSchema)
 		diags = diags.Extend(partialDiags)
 
-		for _, block := range content.Blocks {
-			blocks = append(blocks, block)
-		}
+		blocks = append(blocks, content.Blocks...)
 	}
 
 	return blocks, diags

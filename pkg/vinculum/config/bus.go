@@ -108,7 +108,6 @@ func (h *BusBlockHandler) Preprocess(block *hcl.Block) hcl.Diagnostics {
 
 func (h *BusBlockHandler) FinishPreprocessing(config *Config) hcl.Diagnostics {
 	config.BusCapsuleType = EventBusCapsuleType
-	config.CtyBusMap = make(map[string]cty.Value)
 
 	if !h.mainBusDefined {
 		busDef := BusDefinition{

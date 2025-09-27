@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/transform"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
@@ -116,6 +118,7 @@ func (config *Config) getTransformExprEvalCtx() *hcl.EvalContext {
 	ctx.Functions = map[string]function.Function{
 		"add_topic_prefix":      AddTopicPrefixTransform,
 		"chain":                 ChainTransformsTransform,
+		"cty2go":                Cty2GoTransformFunc,
 		"diff":                  DiffTransform,
 		"drop_topic_pattern":    DropTopicPatternTransform,
 		"drop_topic_prefix":     DropTopicPrefixTransform,
@@ -294,3 +297,28 @@ func (config *Config) makeJqTransform() function.Function {
 		},
 	})
 }
+
+func cty2goSimpleTransform(ctx context.Context, payload any, fields map[string]string) any {
+	var err error
+
+	if payload != nil {
+		if val, ok := payload.(cty.Value); ok {
+			payload, err = go2cty2go.CtyToAny(val)
+			if err != nil {
+				return nil
+			}
+		}
+	}
+
+	return payload
+}
+
+var cty2goTransform = transform.ModifyPayload(cty2goSimpleTransform)
+
+var Cty2GoTransformFunc = function.New(&function.Spec{
+	Params: []function.Parameter{},
+	Type:   function.StaticReturnType(MessageTransformCapsuleType),
+	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
+		return NewMessageTransformCapsule(cty2goTransform), nil
+	},
+})

@@ -32,6 +32,7 @@ type Config struct {
 	BusCapsuleType cty.Type
 	CtyBusMap      map[string]cty.Value
 	Buses          map[string]bus.EventBus
+	CtyServerMap   map[string]cty.Value
 	Servers        map[string]map[string]Server
 
 	Crons map[string]*cron.Cron
@@ -56,15 +57,27 @@ func (c *ConfigBuilder) WithSources(sources ...any) *ConfigBuilder {
 
 func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 	config := &Config{
-		Logger:    cb.logger,
-		Constants: make(map[string]cty.Value),
-		Buses:     make(map[string]bus.EventBus),
-		Crons:     make(map[string]*cron.Cron),
+		Logger:       cb.logger,
+		Constants:    make(map[string]cty.Value),
+		Buses:        make(map[string]bus.EventBus),
+		CtyBusMap:    make(map[string]cty.Value),
+		Servers:      make(map[string]map[string]Server),
+		CtyServerMap: make(map[string]cty.Value),
+		Crons:        make(map[string]*cron.Cron),
 	}
 
 	bodies, diags := ParseConfigFiles(cb.sources...)
 	if diags.HasErrors() {
 		return nil, diags
+	}
+
+	// Add environment variables to the evaluation context
+	config.Constants["env"] = GetEnvObject()
+	config.Constants["httpstatus"] = getStatusCodeObject()
+
+	// Create evaluation context that will be updated as we process
+	config.evalCtx = &hcl.EvalContext{
+		Variables: config.Constants,
 	}
 
 	functions, nonFunctionBodies, addDiags := config.ExtractUserFunctions(bodies)
@@ -79,19 +92,13 @@ func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 		return nil, diags
 	}
 
+	// Update evaluation context with functions
+	config.evalCtx.Functions = config.Functions
+
 	blocks, addDiags := cb.GetBlocks(nonFunctionBodies)
 	diags = diags.Extend(addDiags)
 	if diags.HasErrors() {
 		return nil, diags
-	}
-
-	// Add environment variables to the evaluation context
-	config.Constants["env"] = GetEnvObject()
-	config.Constants["httpstatus"] = getStatusCodeObject()
-
-	config.evalCtx = &hcl.EvalContext{
-		Functions: config.Functions,
-		Variables: config.Constants,
 	}
 
 	// Preprocess blocks
@@ -149,6 +156,7 @@ func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[strin
 	}
 
 	funcs["diff"] = functions.DiffFunc
+	funcs["error"] = functions.ErrorFunc
 	funcs["patch"] = functions.PatchFunc
 	funcs["send"] = SendFunction(c)
 	funcs["sendjson"] = SendJSONFunction(c)
@@ -185,12 +193,4 @@ type ErrorlessStartable struct {
 func (e ErrorlessStartable) Start() error {
 	e.startable.Start()
 	return nil
-}
-
-// IsExpressionProvided checks if an HCL expression was actually provided in the configuration.
-// HCL creates empty expression objects for optional fields that aren't specified,
-// but empty expressions have Start.Byte == End.Byte (zero-length range).
-// Real expressions have End.Byte > Start.Byte (non-zero length range).
-func IsExpressionProvided(expr hcl.Expression) bool {
-	return expr != nil && expr.Range().End.Byte > expr.Range().Start.Byte
 }

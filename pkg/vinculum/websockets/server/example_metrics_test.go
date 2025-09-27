@@ -61,7 +61,7 @@ func ExampleWebSocketMetrics() {
 	}
 
 	// Set up HTTP server
-	http.HandleFunc("/ws", listener.ServeWebsocket)
+	http.Handle("/ws", listener)
 
 	// Start server
 	server := &http.Server{
@@ -168,7 +168,7 @@ func ExampleListener_metricsWithCustomProvider() {
 	}
 
 	// Set up HTTP server
-	http.HandleFunc("/ws", listener.ServeWebsocket)
+	http.Handle("/ws", listener)
 
 	fmt.Println("WebSocket server with custom logging metrics provider running on :8080")
 	fmt.Println("All metrics will be logged to the console")
@@ -210,7 +210,7 @@ func ExampleListener_metricsDisabled() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/ws", listener.ServeWebsocket)
+	http.Handle("/ws", listener)
 
 	fmt.Println("WebSocket server running without metrics on :8080")
 
