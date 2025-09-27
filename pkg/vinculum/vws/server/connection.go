@@ -10,7 +10,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/subutils"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws"
 	"go.uber.org/zap"
 )
 
@@ -163,7 +163,7 @@ func (c *Connection) messageReader() {
 		}
 
 		// Parse JSON message
-		var request websockets.WireMessage
+		var request vws.WireMessage
 		if err := json.Unmarshal(data, &request); err != nil {
 			c.logger.Warn("Failed to parse incoming WebSocket message",
 				zap.Error(err),
@@ -192,8 +192,8 @@ func (c *Connection) messageReader() {
 
 // sendErrorResponse sends a NACK response for malformed requests
 func (c *Connection) sendErrorResponse(id any, errorMsg string) {
-	response := websockets.WireMessage{
-		Kind:  websockets.MessageKindNack,
+	response := vws.WireMessage{
+		Kind:  vws.MessageKindNack,
 		Id:    id,
 		Error: errorMsg,
 	}
@@ -390,13 +390,13 @@ func (c *Connection) OnEvent(ctx context.Context, topic string, message any, fie
 	return nil
 }
 
-func (c *Connection) respondToRequest(ctx context.Context, request websockets.WireMessage, err error) {
-	response := websockets.WireMessage{
-		Kind: websockets.MessageKindAck,
+func (c *Connection) respondToRequest(ctx context.Context, request vws.WireMessage, err error) {
+	response := vws.WireMessage{
+		Kind: vws.MessageKindAck,
 		Id:   request.Id,
 	}
 	if err != nil {
-		response.Kind = websockets.MessageKindNack
+		response.Kind = vws.MessageKindNack
 		response.Error = err.Error()
 	}
 
@@ -405,7 +405,7 @@ func (c *Connection) respondToRequest(ctx context.Context, request websockets.Wi
 		Ctx:     ctx,
 		MsgType: bus.MessageTypePassThrough,
 		Topic:   "",       // Responses don't have topics
-		Payload: response, // websockets.WireMessage will be JSON marshaled directly
+		Payload: response, // vws.WireMessage will be JSON marshaled directly
 	}
 
 	// Send response through PassThrough method
@@ -419,7 +419,7 @@ func (c *Connection) respondToRequest(ctx context.Context, request websockets.Wi
 	}
 }
 
-func handleRequest(c *Connection, ctx context.Context, request websockets.WireMessage) {
+func handleRequest(c *Connection, ctx context.Context, request vws.WireMessage) {
 	var err error
 
 	// Record request metrics
@@ -429,7 +429,7 @@ func handleRequest(c *Connection, ctx context.Context, request websockets.WireMe
 	}()
 
 	switch request.Kind {
-	case websockets.MessageKindEvent:
+	case vws.MessageKindEvent:
 		if request.Topic == "" {
 			err = fmt.Errorf("topic is required")
 		} else if request.Data == nil {
@@ -456,15 +456,15 @@ func handleRequest(c *Connection, ctx context.Context, request websockets.WireMe
 		if request.Id == nil {
 			return
 		}
-	case websockets.MessageKindAck:
+	case vws.MessageKindAck:
 		err = nil
-	case websockets.MessageKindSubscribe:
+	case vws.MessageKindSubscribe:
 		// Subscription controller handles validation and EventBus calls
 		err = c.subscriptionController.Subscribe(ctx, c.eventBus, c.asyncSubscriber, request.Topic)
-	case websockets.MessageKindUnsubscribe:
+	case vws.MessageKindUnsubscribe:
 		// Subscription controller handles validation and EventBus calls
 		err = c.subscriptionController.Unsubscribe(ctx, c.eventBus, c.asyncSubscriber, request.Topic)
-	case websockets.MessageKindUnsubscribeAll:
+	case vws.MessageKindUnsubscribeAll:
 		// Subscription controller handles validation and EventBus calls
 		err = c.subscriptionController.UnsubscribeAll(ctx, c.eventBus, c.asyncSubscriber)
 	default:

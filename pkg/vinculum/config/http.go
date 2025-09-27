@@ -27,7 +27,6 @@ type HttpServerDefinition struct {
 	DefRange    hcl.Range               `hcl:",def_range"`
 	StaticFiles []staticFilesDefinition `hcl:"files,block"`
 	Handlers    []handlerDefinition     `hcl:"handle,block"`
-	WebSockets  []websocketDefinition   `hcl:"websocket,block"`
 }
 
 type staticFilesDefinition struct {
@@ -40,15 +39,14 @@ type staticFilesDefinition struct {
 type handlerDefinition struct {
 	Route    string         `hcl:"route,label"`
 	Action   hcl.Expression `hcl:"action"`
+	Handler  hcl.Expression `hcl:"handler"`
 	Disabled bool           `hcl:"disabled,optional"`
 	DefRange hcl.Range      `hcl:",def_range"`
 }
 
-type websocketDefinition struct {
-	UrlPath  string         `hcl:"urlpath,label"`
-	Server   hcl.Expression `hcl:"server"`
-	Disabled bool           `hcl:"disabled,optional"`
-	DefRange hcl.Range      `hcl:",def_range"`
+type HandlerServer interface {
+	Server
+	GetHandler() http.Handler
 }
 
 func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.Body) (Server, hcl.Diagnostics) {
@@ -100,38 +98,42 @@ func ProcessHttpServerBlock(config *Config, block *hcl.Block, remainingBody hcl.
 			http.StripPrefix(path, http.FileServer(http.Dir(file.Directory)))))
 	}
 
-	for _, handler := range serverDef.Handlers {
-		if handler.Disabled {
+	for _, handlerDef := range serverDef.Handlers {
+		if handlerDef.Disabled {
 			continue
 		}
 
-		mux.Handle(handler.Route, NewLoggingMiddleware(config.Logger, &httpAction{config: config, actionExpr: handler.Action}))
-	}
-
-	for _, websocket := range serverDef.WebSockets {
-		if websocket.Disabled {
-			continue
-		}
-
-		cfgServer, diags := GetServerFromExpression(config, websocket.Server)
-		if diags.HasErrors() {
-			return nil, diags
-		}
-
-		wsServer, ok := cfgServer.(WebsocketServer)
-		if !ok {
+		if IsExpressionProvided(handlerDef.Handler) && IsExpressionProvided(handlerDef.Action) || !IsExpressionProvided(handlerDef.Handler) && !IsExpressionProvided(handlerDef.Action) {
 			return nil, hcl.Diagnostics{
 				&hcl.Diagnostic{
 					Severity: hcl.DiagError,
-					Summary:  "Sserver is not a WebSocket server",
-					Subject:  &websocket.DefRange,
+					Summary:  "Exactly one of handler or action must be specified",
+					Subject:  &handlerDef.DefRange,
 				},
 			}
 		}
 
-		listener := wsServer.GetListener()
+		if IsExpressionProvided(handlerDef.Action) {
+			mux.Handle(handlerDef.Route, NewLoggingMiddleware(config.Logger, &httpAction{config: config, actionExpr: handlerDef.Action}))
+		} else {
+			handler, diags := GetServerFromExpression(config, handlerDef.Handler)
+			if diags.HasErrors() {
+				return nil, diags
+			}
 
-		mux.Handle(websocket.UrlPath, NewLoggingMiddleware(config.Logger, listener))
+			handlerServer, ok := handler.(HandlerServer)
+			if !ok {
+				return nil, hcl.Diagnostics{
+					&hcl.Diagnostic{
+						Severity: hcl.DiagError,
+						Summary:  "Provided handler does not implement Handler interface",
+						Subject:  &handlerDef.DefRange,
+					},
+				}
+			}
+
+			mux.Handle(handlerDef.Route, NewLoggingMiddleware(config.Logger, handlerServer.GetHandler()))
+		}
 	}
 
 	server := &HttpServer{
@@ -156,7 +158,7 @@ func (h *HttpServer) Start() error {
 		h.Logger.Info("Starting HTTP server", zap.String("name", h.Name), zap.String("addr", h.Server.Addr))
 		err := h.Server.ListenAndServe()
 		if err != nil {
-			h.Logger.Error("Failed to start HTTP server", zap.String("name", h.Name), zap.Error(err))
+			h.Logger.Error("Failed to start HTTP server", zap.Error(err))
 		}
 	}()
 

@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets/client"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws/client"
 	"go.uber.org/zap"
 )
 

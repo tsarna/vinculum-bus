@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws"
 	"go.uber.org/zap"
 )
 
@@ -209,8 +209,8 @@ func (c *Client) Subscribe(ctx context.Context, topic string) error {
 	}
 
 	// Send subscription to server
-	msg := websockets.WireMessage{
-		Kind:  websockets.MessageKindSubscribe,
+	msg := vws.WireMessage{
+		Kind:  vws.MessageKindSubscribe,
 		Topic: topic,
 		Id:    c.nextMessageID(),
 	}
@@ -235,8 +235,8 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string) error {
 	}
 
 	// Send unsubscription to server
-	msg := websockets.WireMessage{
-		Kind:  websockets.MessageKindUnsubscribe,
+	msg := vws.WireMessage{
+		Kind:  vws.MessageKindUnsubscribe,
 		Topic: topic,
 		Id:    c.nextMessageID(),
 	}
@@ -261,8 +261,8 @@ func (c *Client) UnsubscribeAll(ctx context.Context) error {
 	}
 
 	// Send unsubscribe all to server
-	msg := websockets.WireMessage{
-		Kind: websockets.MessageKindUnsubscribeAll,
+	msg := vws.WireMessage{
+		Kind: vws.MessageKindUnsubscribeAll,
 		Id:   c.nextMessageID(),
 	}
 
@@ -284,8 +284,8 @@ func (c *Client) Publish(ctx context.Context, topic string, payload any) error {
 		return fmt.Errorf("client is not connected")
 	}
 
-	msg := websockets.WireMessage{
-		Kind:  websockets.MessageKindEvent,
+	msg := vws.WireMessage{
+		Kind:  vws.MessageKindEvent,
 		Topic: topic,
 		Data:  payload,
 	}
@@ -299,8 +299,8 @@ func (c *Client) PublishSync(ctx context.Context, topic string, payload any) err
 		return fmt.Errorf("client is not connected")
 	}
 
-	msg := websockets.WireMessage{
-		Kind:  websockets.MessageKindEvent,
+	msg := vws.WireMessage{
+		Kind:  vws.MessageKindEvent,
 		Topic: topic,
 		Data:  payload,
 		Id:    c.nextMessageID(),
@@ -332,7 +332,7 @@ func (c *Client) PassThrough(msg bus.EventBusMessage) error {
 }
 
 // sendMessage sends a message and waits for ACK/NACK response
-func (c *Client) sendMessage(ctx context.Context, msg websockets.WireMessage) error {
+func (c *Client) sendMessage(ctx context.Context, msg vws.WireMessage) error {
 	msgID := msg.Id.(int64)
 
 	// Create response channel
@@ -375,7 +375,7 @@ func (c *Client) sendMessage(ctx context.Context, msg websockets.WireMessage) er
 }
 
 // sendMessageNoResponse sends a message without waiting for a response
-func (c *Client) sendMessageNoResponse(msg websockets.WireMessage) error {
+func (c *Client) sendMessageNoResponse(msg vws.WireMessage) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
@@ -488,16 +488,16 @@ func (c *Client) writeLoop() {
 
 // handleMessage processes incoming messages
 func (c *Client) handleMessage(data []byte) {
-	var msg websockets.WireMessage
+	var msg vws.WireMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		c.logger.Warn("Failed to unmarshal WebSocket message", zap.Error(err))
 		return
 	}
 
 	switch msg.Kind {
-	case websockets.MessageKindAck, websockets.MessageKindNack:
+	case vws.MessageKindAck, vws.MessageKindNack:
 		c.handleResponse(msg)
-	case websockets.MessageKindEvent: // Event messages have empty kind
+	case vws.MessageKindEvent: // Event messages have empty kind
 		c.handleEvent(msg)
 	default:
 		c.logger.Warn("Unknown message kind", zap.String("kind", msg.Kind))
@@ -505,7 +505,7 @@ func (c *Client) handleMessage(data []byte) {
 }
 
 // handleResponse processes ACK/NACK responses
-func (c *Client) handleResponse(msg websockets.WireMessage) {
+func (c *Client) handleResponse(msg vws.WireMessage) {
 	if msg.Id == nil {
 		return
 	}
@@ -520,7 +520,7 @@ func (c *Client) handleResponse(msg websockets.WireMessage) {
 	respChan, exists := c.cleanupPendingRequest(id)
 	if exists {
 		resp := response{
-			Success: msg.Kind == websockets.MessageKindAck,
+			Success: msg.Kind == vws.MessageKindAck,
 			Error:   msg.Error,
 		}
 		select {
@@ -531,7 +531,7 @@ func (c *Client) handleResponse(msg websockets.WireMessage) {
 }
 
 // handleEvent processes incoming event messages
-func (c *Client) handleEvent(msg websockets.WireMessage) {
+func (c *Client) handleEvent(msg vws.WireMessage) {
 	if msg.Topic == "" {
 		return
 	}

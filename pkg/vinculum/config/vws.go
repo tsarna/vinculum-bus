@@ -10,22 +10,17 @@ import (
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/tsarna/go2cty2go"
 	"github.com/tsarna/vinculum/pkg/vinculum/transform"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets/server"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws/server"
 	"github.com/zclconf/go-cty/cty"
 )
-
-type WebsocketServer interface {
-	Server
-	GetListener() http.Handler
-}
 
 type VinculumWebsocketServer struct {
 	BaseServer
 	Listener *server.Listener
 }
 
-func (s *VinculumWebsocketServer) GetListener() http.Handler {
+func (s *VinculumWebsocketServer) GetHandler() http.Handler {
 	return s.Listener
 }
 
@@ -147,7 +142,7 @@ func ProcessVinculumWebsocketsServerBlock(config *Config, block *hcl.Block, rema
 }
 
 func (config *Config) MakeAllowSend(expr hcl.Expression) server.EventAuthFunc {
-	return func(ctx context.Context, msg *websockets.WireMessage) (*websockets.WireMessage, error) {
+	return func(ctx context.Context, msg *vws.WireMessage) (*vws.WireMessage, error) {
 		ctyMessage, err := go2cty2go.AnyToCty(msg.Data)
 		if err != nil {
 			return nil, err

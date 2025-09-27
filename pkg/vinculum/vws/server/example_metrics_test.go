@@ -9,7 +9,7 @@ import (
 
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
 	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
-	"github.com/tsarna/vinculum/pkg/vinculum/websockets/server"
+	"github.com/tsarna/vinculum/pkg/vinculum/vws/server"
 	"go.uber.org/zap"
 )
 

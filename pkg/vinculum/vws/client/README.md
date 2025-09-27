@@ -22,7 +22,7 @@ import (
     "log"
     "time"
 
-    "github.com/tsarna/vinculum/pkg/vinculum/websockets/client"
+    "github.com/tsarna/vinculum/pkg/vinculum/vws/client"
     "go.uber.org/zap"
 )
 
@@ -352,7 +352,7 @@ The package includes comprehensive tests:
 
 Run tests with:
 ```bash
-go test ./pkg/vinculum/websockets/client -v
+go test ./pkg/vinculum/vws/client -v
 ```
 
 ## Examples

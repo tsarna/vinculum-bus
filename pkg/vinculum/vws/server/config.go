@@ -49,7 +49,7 @@ const (
 //
 // Example:
 //
-//	listener, err := websockets.NewListener().
+//	listener, err := vws.NewListener().
 //	    WithEventBus(eventBus).
 //	    WithLogger(logger).
 //	    WithMetricsProvider(metricsProvider).

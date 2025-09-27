@@ -23,7 +23,7 @@ Expose your EventBus over WebSockets for real-time web applications:
 - **Built-in metrics** and connection management
 - **Message transformations** and filtering
 
-📖 **[WebSocket Server Documentation](pkg/vinculum/websockets/server/README.md)**
+📖 **[WebSocket Server Documentation](pkg/vinculum/vws/server/README.md)**
 
 ### 🔌 **WebSocket Client**
 Connect to Vinculum WebSocket servers from Go applications:
@@ -33,7 +33,7 @@ Connect to Vinculum WebSocket servers from Go applications:
 - **Comprehensive error handling**
 - **Builder pattern** for easy configuration
 
-📖 **[WebSocket Client Documentation](pkg/vinculum/websockets/client/README.md)**
+📖 **[WebSocket Client Documentation](pkg/vinculum/vws/client/README.md)**
 
 ## 🚀 Quick Start
 
@@ -49,7 +49,7 @@ Both components implement the Vinculum WebSocket Protocol:
 - **Request/response** correlation
 - **Error handling** and acknowledgments
 
-📖 **[Protocol Specification](pkg/vinculum/websockets/PROTOCOL.md)**
+📖 **[Protocol Specification](pkg/vinculum/vws/PROTOCOL.md)**
 
 ## 🎯 Use Cases
 

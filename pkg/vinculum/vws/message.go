@@ -1,4 +1,4 @@
-package websockets
+package vws
 
 // Message kind constants for the Vinculum WebSocket protocol.
 // These correspond to the "k" (kind) field in wire messages.

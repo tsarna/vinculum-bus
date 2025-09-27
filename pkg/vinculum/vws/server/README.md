@@ -25,7 +25,7 @@ import (
     "net/http"
     
     "github.com/tsarna/vinculum/pkg/vinculum"
-    "github.com/tsarna/vinculum/pkg/vinculum/websockets/server"
+    "github.com/tsarna/vinculum/pkg/vinculum/vws/server"
     "go.uber.org/zap"
 )
 
@@ -109,7 +109,7 @@ Control which events clients can publish:
 .WithEventAuth(server.AllowTopicPrefix("client/"))
 
 // Custom authorization logic
-.WithEventAuth(func(ctx context.Context, msg *websockets.WireMessage) (*websockets.WireMessage, error) {
+.WithEventAuth(func(ctx context.Context, msg *vws.WireMessage) (*vws.WireMessage, error) {
     // Custom validation logic
     if !isAuthorized(ctx, msg.Topic) {
         return nil, fmt.Errorf("unauthorized topic: %s", msg.Topic)
@@ -148,7 +148,7 @@ Transform messages before sending to clients:
 
 ```go
 // Example: Add timestamp to all messages
-func addTimestamp(msg *websockets.WireMessage) *websockets.WireMessage {
+func addTimestamp(msg *vws.WireMessage) *vws.WireMessage {
     if msg.Data == nil {
         msg.Data = make(map[string]interface{})
     }
@@ -157,7 +157,7 @@ func addTimestamp(msg *websockets.WireMessage) *websockets.WireMessage {
 }
 
 // Example: Filter sensitive data
-func filterSensitive(msg *websockets.WireMessage) *websockets.WireMessage {
+func filterSensitive(msg *vws.WireMessage) *vws.WireMessage {
     if data, ok := msg.Data["password"]; ok {
         delete(msg.Data, "password")
     }

@@ -1,6 +1,6 @@
 # Vinculum WebSocket Event Protocol
 
-The Vinculum WebSocket protocol is JSON-based and using short keys for brevity and efficiency. Each message is a JSON object with specific keys that define the message type and content.
+The Vinculum WebSocket protocol (VWS) is JSON-based and uses short keys for brevity and efficiency. Each message is a JSON object with specific keys that define the message type and content.
 
 ## Message Structure
 

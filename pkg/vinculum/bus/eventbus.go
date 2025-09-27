@@ -13,7 +13,7 @@ import (
 )
 
 type EventBus interface {
-	Subscriber // An EventBus can be subscribed to other event busses
+	Subscriber // An EventBus can be subscribed to other event buses
 
 	Start() error
 	Stop() error
