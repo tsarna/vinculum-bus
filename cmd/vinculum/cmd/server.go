@@ -23,19 +23,22 @@ the event bus and other configured services.
 Examples:
   vinculum server config.vcl
   vinculum server ./configs/
-  vinculum server config1.vcl config2.vcl ./more-configs/`,
+  vinculum server config1.vcl config2.vcl ./more-configs/
+  vinculum server -f /path/to/files config.vcl`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runServer,
 }
 
 var (
 	logLevel string
+	filePath string
 )
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
 
 	serverCmd.Flags().StringVarP(&logLevel, "log-level", "l", "info", "log level (debug, info, warn, error)")
+	serverCmd.Flags().StringVarP(&filePath, "file-path", "f", "", "base directory for file functions (enables file, fileexists, fileset functions)")
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
@@ -49,12 +52,18 @@ func runServer(cmd *cobra.Command, args []string) error {
 	logger.Info("Starting vinculum server",
 		zap.Strings("config-paths", args),
 		zap.String("log-level", logLevel),
+		zap.String("file-path", filePath),
 	)
 
-	cfg, diags := config.NewConfig().
+	configBuilder := config.NewConfig().
 		WithLogger(logger).
-		WithSources(stringSliceToAnySlice(args)...).
-		Build()
+		WithSources(stringSliceToAnySlice(args)...)
+
+	if filePath != "" {
+		configBuilder = configBuilder.WithBaseDir(filePath)
+	}
+
+	cfg, diags := configBuilder.Build()
 
 	if diags.HasErrors() {
 		logger.Error("Failed to build config", zap.Any("diags", diags))

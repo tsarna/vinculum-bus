@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 
+	"github.com/hashicorp/go-cty-funcs/filesystem"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/robfig/cron/v3"
 	"github.com/tsarna/vinculum/pkg/vinculum/bus"
@@ -15,6 +16,7 @@ import (
 type ConfigBuilder struct {
 	logger        *zap.Logger
 	sources       []any
+	baseDir       string
 	blockHandlers map[string]BlockHandler
 }
 
@@ -27,6 +29,7 @@ type Config struct {
 	Functions map[string]function.Function
 	Constants map[string]cty.Value
 	evalCtx   *hcl.EvalContext
+	BaseDir   string
 
 	Startables     []Startable
 	BusCapsuleType cty.Type
@@ -55,9 +58,15 @@ func (c *ConfigBuilder) WithSources(sources ...any) *ConfigBuilder {
 	return c
 }
 
+func (c *ConfigBuilder) WithBaseDir(baseDir string) *ConfigBuilder {
+	c.baseDir = baseDir
+	return c
+}
+
 func (cb *ConfigBuilder) Build() (*Config, hcl.Diagnostics) {
 	config := &Config{
 		Logger:       cb.logger,
+		BaseDir:      cb.baseDir,
 		Constants:    make(map[string]cty.Value),
 		Buses:        make(map[string]bus.EventBus),
 		CtyBusMap:    make(map[string]cty.Value),
@@ -162,6 +171,18 @@ func (c *Config) GetFunctions(userFuncs map[string]function.Function) (map[strin
 	funcs["sendjson"] = SendJSONFunction(c)
 	funcs["sendgo"] = SendGoFunction(c)
 	funcs["typeof"] = functions.TypeOfFunc
+
+	if c.BaseDir != "" {
+		funcs["abspath"] = filesystem.AbsPathFunc
+		funcs["basename"] = filesystem.BasenameFunc
+		funcs["dirname"] = filesystem.DirnameFunc
+		funcs["file"] = filesystem.MakeFileFunc(c.BaseDir, false)
+		funcs["fileexists"] = filesystem.MakeFileExistsFunc(c.BaseDir)
+		funcs["fileset"] = filesystem.MakeFileSetFunc(c.BaseDir)
+		funcs["file"] = filesystem.MakeFileFunc(c.BaseDir, true)
+		funcs["filebase64"] = filesystem.MakeFileFunc(c.BaseDir, true)
+		funcs["pathexpand"] = filesystem.PathExpandFunc
+	}
 
 	for name, function := range userFuncs {
 		if _, exists := funcs[name]; exists {
