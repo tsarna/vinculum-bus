@@ -30,7 +30,10 @@ go.work.sum
 # Notes
 FUTURE
 
+# Test files
+test.vcl
+x
+
 # Editor/IDE
 .idea/
 .vscode/
-

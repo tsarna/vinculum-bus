@@ -7,9 +7,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/tsarna/vinculum/pkg/vinculum/bus"
-	"github.com/tsarna/vinculum/pkg/vinculum/o11y"
-	"github.com/tsarna/vinculum/pkg/vinculum/otel"
+	"github.com/tsarna/vinculum-bus"
+	"github.com/tsarna/vinculum-bus/o11y"
+	"github.com/tsarna/vinculum-bus/otel"
 )
 
 // NoOpSubscriber for benchmarking - minimal overhead
