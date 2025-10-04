@@ -478,7 +478,7 @@ func TestEventBusSubscribeUnsubscribe(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Test subscription
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	// Give time for the subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -489,7 +489,7 @@ func TestEventBusSubscribeUnsubscribe(t *testing.T) {
 	}
 
 	// Test unsubscription
-	eventBus.Unsubscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Unsubscribe(context.Background(), "test/topic", subscriber)
 
 	// Give time for the unsubscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -515,8 +515,8 @@ func TestEventBusUnsubscribeAll(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Subscribe to multiple topics
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic1")
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic2")
+	eventBus.Subscribe(context.Background(), "test/topic1", subscriber)
+	eventBus.Subscribe(context.Background(), "test/topic2", subscriber)
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -553,7 +553,7 @@ func TestEventBusPublishEvent(t *testing.T) {
 	defer eventBus.Stop()
 
 	subscriber := NewMockSubscriber()
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -595,7 +595,7 @@ func TestEventBusExactTopicMatching(t *testing.T) {
 	defer eventBus.Stop()
 
 	subscriber := NewMockSubscriber()
-	eventBus.Subscribe(context.Background(), subscriber, "exact/topic")
+	eventBus.Subscribe(context.Background(), "exact/topic", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -635,7 +635,7 @@ func TestEventBusWildcardMatching(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Subscribe with single-level wildcard
-	eventBus.Subscribe(context.Background(), subscriber, "test/+/topic")
+	eventBus.Subscribe(context.Background(), "test/+/topic", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -670,7 +670,7 @@ func TestEventBusMultilevelWildcardMatching(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Subscribe with multi-level wildcard
-	eventBus.Subscribe(context.Background(), subscriber, "test/#")
+	eventBus.Subscribe(context.Background(), "test/#", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -705,7 +705,7 @@ func TestEventBusParameterExtraction(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Subscribe with parameter extraction (automatically detected)
-	eventBus.Subscribe(context.Background(), subscriber, "user/+userId/profile/+action")
+	eventBus.Subscribe(context.Background(), "user/+userId/profile/+action", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -751,8 +751,8 @@ func TestEventBusMultipleSubscribers(t *testing.T) {
 	subscriber2 := NewMockSubscriber()
 
 	// Both subscribe to the same topic
-	eventBus.Subscribe(context.Background(), subscriber1, "shared/topic")
-	eventBus.Subscribe(context.Background(), subscriber2, "shared/topic")
+	eventBus.Subscribe(context.Background(), "shared/topic", subscriber1)
+	eventBus.Subscribe(context.Background(), "shared/topic", subscriber2)
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -791,10 +791,10 @@ func TestEventBusMultipleMatchingPatterns(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Subscribe to multiple patterns that could match the same topic
-	eventBus.Subscribe(context.Background(), subscriber, "device/+/data")   // Matches device/123/data
-	eventBus.Subscribe(context.Background(), subscriber, "device/123/+")    // Also matches device/123/data
-	eventBus.Subscribe(context.Background(), subscriber, "device/123/data") // Exact match for device/123/data
-	eventBus.Subscribe(context.Background(), subscriber, "device/#")        // Also matches device/123/data
+	eventBus.Subscribe(context.Background(), "device/+/data", subscriber)   // Matches device/123/data
+	eventBus.Subscribe(context.Background(), "device/123/+", subscriber)    // Also matches device/123/data
+	eventBus.Subscribe(context.Background(), "device/123/data", subscriber) // Exact match for device/123/data
+	eventBus.Subscribe(context.Background(), "device/#", subscriber)        // Also matches device/123/data
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -832,7 +832,7 @@ func TestEventBusMessageBeforeStart(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Try to subscribe before starting event bus
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	// Try to publish before starting event bus
 	eventBus.Publish(context.Background(), "test/topic", "message")
@@ -871,7 +871,7 @@ func TestEventBusConcurrentOperations(t *testing.T) {
 	subscribers := make([]*MockSubscriber, numSubscribers)
 	for i := 0; i < numSubscribers; i++ {
 		subscribers[i] = NewMockSubscriber()
-		eventBus.Subscribe(context.Background(), subscribers[i], "concurrent/test")
+		eventBus.Subscribe(context.Background(), "concurrent/test", subscribers[i])
 	}
 
 	// Give time for subscriptions to be processed
@@ -916,7 +916,7 @@ func TestEventBusChannelBuffer(t *testing.T) {
 
 	// Create a slow subscriber that takes time to process events
 	subscriber := NewMockSubscriber()
-	eventBus.Subscribe(context.Background(), subscriber, "buffer/test")
+	eventBus.Subscribe(context.Background(), "buffer/test", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -971,7 +971,7 @@ func TestEventBusConfigurableBuffer(t *testing.T) {
 			defer eventBus.Stop()
 
 			subscriber := NewMockSubscriber()
-			eventBus.Subscribe(context.Background(), subscriber, "config/test")
+			eventBus.Subscribe(context.Background(), "config/test", subscriber)
 			time.Sleep(10 * time.Millisecond)
 
 			// Send messages equal to expected buffer size + 10
@@ -1006,7 +1006,7 @@ func TestEventBusObservabilityConfigurableBuffer(t *testing.T) {
 	defer eventBus.Stop()
 
 	subscriber := NewMockSubscriber()
-	eventBus.Subscribe(context.Background(), subscriber, "obs/test")
+	eventBus.Subscribe(context.Background(), "obs/test", subscriber)
 	time.Sleep(10 * time.Millisecond)
 
 	// Send messages equal to buffer size + 10
@@ -1038,7 +1038,7 @@ func TestEventBusStopWithPendingMessages(t *testing.T) {
 	}
 
 	subscriber := NewMockSubscriber()
-	eventBus.Subscribe(context.Background(), subscriber, "stop/test")
+	eventBus.Subscribe(context.Background(), "stop/test", subscriber)
 
 	// Give time for subscription to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -1100,11 +1100,11 @@ func TestEventBusAutomaticParameterDetection(t *testing.T) {
 	subscriber := NewMockSubscriber()
 
 	// Test that patterns with extractions automatically get parameter extraction
-	eventBus.Subscribe(context.Background(), subscriber, "api/+version/users/+userId")
+	eventBus.Subscribe(context.Background(), "api/+version/users/+userId", subscriber)
 
 	// Test that patterns without extractions work normally
-	eventBus.Subscribe(context.Background(), subscriber, "simple/topic")
-	eventBus.Subscribe(context.Background(), subscriber, "wildcard/+/pattern")
+	eventBus.Subscribe(context.Background(), "simple/topic", subscriber)
+	eventBus.Subscribe(context.Background(), "wildcard/+/pattern", subscriber)
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)
@@ -1162,7 +1162,7 @@ func TestEventBusPublishSync(t *testing.T) {
 	defer eventBus.Stop()
 
 	mockSub := &MockSubscriber{}
-	err = eventBus.Subscribe(context.Background(), mockSub, "test/sync")
+	err = eventBus.Subscribe(context.Background(), "test/sync", mockSub)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
@@ -1209,7 +1209,7 @@ func TestEventBusPublishSyncWithError(t *testing.T) {
 
 	// Create a subscriber that returns an error
 	errorSub := &MockSubscriber{simulateError: true}
-	err = eventBus.Subscribe(context.Background(), errorSub, "test/error")
+	err = eventBus.Subscribe(context.Background(), "test/error", errorSub)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
@@ -1269,7 +1269,7 @@ func TestEventBusWithObservability(t *testing.T) {
 	defer eventBus.Stop()
 
 	mockSub := &MockSubscriber{}
-	err = eventBus.Subscribe(context.Background(), mockSub, "test/metrics")
+	err = eventBus.Subscribe(context.Background(), "test/metrics", mockSub)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
@@ -1422,11 +1422,11 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 		metricsReceived: &metricsReceived,
 	}
 
-	eventBus.Subscribe(context.Background(), metricsSubscriber, "$metrics")
+	eventBus.Subscribe(context.Background(), "$metrics", metricsSubscriber)
 
 	// Generate some metrics
 	testSub := &MockSubscriber{}
-	observableEventBus.Subscribe(context.Background(), testSub, "test/topic")
+	observableEventBus.Subscribe(context.Background(), "test/topic", testSub)
 	observableEventBus.Publish(context.Background(), "test/topic", "test message")
 	observableEventBus.PublishSync(context.Background(), "test/topic", "sync test message")
 
@@ -1482,4 +1482,294 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	if subscriberCount, exists := receivedMetrics.Gauges["eventbus_active_subscribers"]; !exists || subscriberCount < 1 {
 		t.Errorf("Expected active subscribers gauge >= 1, got %f", subscriberCount)
 	}
+}
+
+func TestEventBusSubscribeFunc(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start event bus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	// Test basic SubscribeFunc functionality
+	t.Run("basic functionality", func(t *testing.T) {
+		var receivedEvents []Event
+		var mu sync.Mutex
+
+		// Define a simple receiver function
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			receivedEvents = append(receivedEvents, Event{
+				Topic:   topic,
+				Message: message,
+				Fields:  fields,
+			})
+			return nil
+		}
+
+		// Subscribe using SubscribeFunc
+		subscriber, err := eventBus.SubscribeFunc(context.Background(), "test/func", receiver)
+		if err != nil {
+			t.Fatalf("SubscribeFunc failed: %v", err)
+		}
+
+		if subscriber == nil {
+			t.Fatal("SubscribeFunc should return a non-nil Subscriber")
+		}
+
+		// Give time for subscription to be processed
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish an event
+		testMessage := "function subscriber test"
+		err = eventBus.Publish(context.Background(), "test/func", testMessage)
+		if err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+
+		// Give time for event to be processed
+		time.Sleep(10 * time.Millisecond)
+
+		mu.Lock()
+		events := make([]Event, len(receivedEvents))
+		copy(events, receivedEvents)
+		mu.Unlock()
+
+		if len(events) != 1 {
+			t.Fatalf("Expected 1 event, got %d", len(events))
+		}
+
+		event := events[0]
+		if event.Topic != "test/func" {
+			t.Errorf("Expected topic 'test/func', got '%s'", event.Topic)
+		}
+		if event.Message != testMessage {
+			t.Errorf("Expected message '%s', got '%v'", testMessage, event.Message)
+		}
+		if event.Fields != nil {
+			t.Errorf("Expected nil fields for exact match, got %v", event.Fields)
+		}
+	})
+
+	// Test that returned subscriber can be used for unsubscription
+	t.Run("unsubscribe returned subscriber", func(t *testing.T) {
+		var eventCount int32
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			atomic.AddInt32(&eventCount, 1)
+			return nil
+		}
+
+		// Subscribe using SubscribeFunc
+		subscriber, err := eventBus.SubscribeFunc(context.Background(), "test/unsub", receiver)
+		if err != nil {
+			t.Fatalf("SubscribeFunc failed: %v", err)
+		}
+
+		// Give time for subscription to be processed
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish an event - should be received
+		err = eventBus.Publish(context.Background(), "test/unsub", "message1")
+		if err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		if atomic.LoadInt32(&eventCount) != 1 {
+			t.Errorf("Expected 1 event before unsubscribe, got %d", atomic.LoadInt32(&eventCount))
+		}
+
+		// Unsubscribe using the returned subscriber
+		err = eventBus.Unsubscribe(context.Background(), "test/unsub", subscriber)
+		if err != nil {
+			t.Fatalf("Unsubscribe failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish another event - should not be received
+		err = eventBus.Publish(context.Background(), "test/unsub", "message2")
+		if err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		if atomic.LoadInt32(&eventCount) != 1 {
+			t.Errorf("Expected still 1 event after unsubscribe, got %d", atomic.LoadInt32(&eventCount))
+		}
+	})
+
+	// Test SubscribeFunc with parameter extraction
+	t.Run("parameter extraction", func(t *testing.T) {
+		var receivedEvent Event
+		var mu sync.Mutex
+		var eventReceived bool
+
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			receivedEvent = Event{
+				Topic:   topic,
+				Message: message,
+				Fields:  fields,
+			}
+			eventReceived = true
+			return nil
+		}
+
+		// Subscribe with parameter extraction pattern
+		subscriber, err := eventBus.SubscribeFunc(context.Background(), "user/+userId/action/+action", receiver)
+		if err != nil {
+			t.Fatalf("SubscribeFunc failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish event with parameters
+		err = eventBus.Publish(context.Background(), "user/123/action/login", "user login data")
+		if err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if !eventReceived {
+			t.Fatal("Expected to receive event")
+		}
+
+		if receivedEvent.Fields == nil {
+			t.Fatal("Expected extracted fields, got nil")
+		}
+
+		if receivedEvent.Fields["userId"] != "123" {
+			t.Errorf("Expected userId '123', got '%s'", receivedEvent.Fields["userId"])
+		}
+
+		if receivedEvent.Fields["action"] != "login" {
+			t.Errorf("Expected action 'login', got '%s'", receivedEvent.Fields["action"])
+		}
+
+		// Clean up
+		eventBus.Unsubscribe(context.Background(), "user/+userId/action/+action", subscriber)
+	})
+
+	// Test error handling when receiver function returns error
+	t.Run("error handling", func(t *testing.T) {
+		var errorCount int32
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			atomic.AddInt32(&errorCount, 1)
+			return fmt.Errorf("receiver error")
+		}
+
+		subscriber, err := eventBus.SubscribeFunc(context.Background(), "test/error", receiver)
+		if err != nil {
+			t.Fatalf("SubscribeFunc failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish event - receiver will return error but event bus should continue
+		err = eventBus.Publish(context.Background(), "test/error", "error test")
+		if err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		if atomic.LoadInt32(&errorCount) != 1 {
+			t.Errorf("Expected receiver to be called once, got %d", atomic.LoadInt32(&errorCount))
+		}
+
+		// Clean up
+		eventBus.Unsubscribe(context.Background(), "test/error", subscriber)
+	})
+
+	// Test SubscribeFunc with wildcard patterns
+	t.Run("wildcard patterns", func(t *testing.T) {
+		var receivedTopics []string
+		var mu sync.Mutex
+
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			receivedTopics = append(receivedTopics, topic)
+			return nil
+		}
+
+		// Subscribe with single-level wildcard
+		subscriber, err := eventBus.SubscribeFunc(context.Background(), "wildcard/+/test", receiver)
+		if err != nil {
+			t.Fatalf("SubscribeFunc failed: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+
+		// Publish events that should match
+		eventBus.Publish(context.Background(), "wildcard/abc/test", "message1")
+		eventBus.Publish(context.Background(), "wildcard/xyz/test", "message2")
+
+		// Publish event that should not match
+		eventBus.Publish(context.Background(), "wildcard/abc/xyz/test", "message3")
+
+		time.Sleep(10 * time.Millisecond)
+
+		mu.Lock()
+		topics := make([]string, len(receivedTopics))
+		copy(topics, receivedTopics)
+		mu.Unlock()
+
+		if len(topics) != 2 {
+			t.Errorf("Expected 2 matching topics, got %d: %v", len(topics), topics)
+		}
+
+		expectedTopics := []string{"wildcard/abc/test", "wildcard/xyz/test"}
+		for _, expected := range expectedTopics {
+			found := false
+			for _, received := range topics {
+				if received == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Expected to receive topic '%s', but didn't", expected)
+			}
+		}
+
+		// Clean up
+		eventBus.Unsubscribe(context.Background(), "wildcard/+/test", subscriber)
+	})
+
+	// Test SubscribeFunc before event bus is started
+	t.Run("subscribe before start", func(t *testing.T) {
+		// Create a new event bus but don't start it
+		stoppedBus, err := NewEventBus().WithLogger(logger).Build()
+		if err != nil {
+			t.Fatalf("Build() returned error: %v", err)
+		}
+
+		receiver := func(ctx context.Context, topic string, message any, fields map[string]string) error {
+			return nil
+		}
+
+		// SubscribeFunc should return error when bus is not started
+		subscriber, err := stoppedBus.SubscribeFunc(context.Background(), "test/stopped", receiver)
+		if err == nil {
+			t.Error("Expected SubscribeFunc to return error when bus is not started")
+		}
+		if subscriber != nil {
+			t.Error("Expected nil subscriber when SubscribeFunc fails")
+		}
+	})
 }

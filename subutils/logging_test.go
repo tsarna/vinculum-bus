@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsarna/vinculum-bus"
+	bus "github.com/tsarna/vinculum-bus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -163,8 +163,8 @@ func TestLoggingSubscriberWithEventBus(t *testing.T) {
 	infoSubscriber := NewNamedLoggingSubscriber(nil, logger, zap.InfoLevel, "InfoSubscriber")
 
 	// Subscribe to topics
-	eventBus.Subscribe(context.Background(), debugSubscriber, "debug/+level/topic")
-	eventBus.Subscribe(context.Background(), infoSubscriber, "info/events/#")
+	eventBus.Subscribe(context.Background(), "debug/+level/topic", debugSubscriber)
+	eventBus.Subscribe(context.Background(), "info/events/#", infoSubscriber)
 
 	// Give time for subscriptions to be processed
 	time.Sleep(10 * time.Millisecond)

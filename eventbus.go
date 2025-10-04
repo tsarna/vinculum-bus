@@ -18,8 +18,9 @@ type EventBus interface {
 	Start() error
 	Stop() error
 
-	Subscribe(ctx context.Context, subscriber Subscriber, topic string) error
-	Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error
+	Subscribe(ctx context.Context, topic string, subscriber Subscriber) error
+	SubscribeFunc(ctx context.Context, topic string, receiver EventReceiver) (Subscriber, error)
+	Unsubscribe(ctx context.Context, topic string, subscriber Subscriber) error
 	UnsubscribeAll(ctx context.Context, subscriber Subscriber) error
 
 	Publish(ctx context.Context, topic string, payload any) error
@@ -292,7 +293,7 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 	return err
 }
 
-func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, topic string) error {
+func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber Subscriber) error {
 	// Use the provided context instead of creating a new one
 	if ctx == nil {
 		ctx = context.Background()
@@ -352,7 +353,18 @@ func (b *basicEventBus) Subscribe(ctx context.Context, subscriber Subscriber, to
 	return err
 }
 
-func (b *basicEventBus) Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error {
+// SubscribeFunc subscribes a funtion to a topic. Returns a Subscriber that can be passed to Unsubscribe.
+func (b *basicEventBus) SubscribeFunc(ctx context.Context, topic string, receiver EventReceiver) (Subscriber, error) {
+	subscriber := NewEventReceiver(receiver)
+	err := b.Subscribe(ctx, topic, subscriber)
+	if err != nil {
+		return nil, err
+	}
+
+	return subscriber, nil
+}
+
+func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscriber Subscriber) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

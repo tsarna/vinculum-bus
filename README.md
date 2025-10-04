@@ -86,8 +86,8 @@ type EventBus interface {
     Start() error
     Stop() error
     
-    Subscribe(ctx context.Context, subscriber Subscriber, topic string) error
-    Unsubscribe(ctx context.Context, subscriber Subscriber, topic string) error
+    Subscribe(ctx context.Context, topic string, subscriber Subscriber) error
+    Unsubscribe(ctx context.Context, topic string, subscriber Subscriber) error
     UnsubscribeAll(ctx context.Context, subscriber Subscriber) error
     
     Publish(ctx context.Context, topic string, payload any) error      // Async, fire-and-forget

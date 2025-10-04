@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/tsarna/vinculum-bus"
+	bus "github.com/tsarna/vinculum-bus"
 	"github.com/tsarna/vinculum-bus/o11y"
 	"github.com/tsarna/vinculum-bus/otel"
 )
@@ -32,7 +32,7 @@ func BenchmarkPublishNoObservability(b *testing.B) {
 
 	// Add a subscriber to avoid messages being dropped
 	subscriber := &NoOpSubscriber{}
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -75,7 +75,7 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 
 	// Add a subscriber to avoid messages being dropped
 	subscriber := &NoOpSubscriber{}
-	observableEventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	observableEventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -106,7 +106,7 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 
 	// Add a subscriber to avoid messages being dropped
 	subscriber := &NoOpSubscriber{}
-	observableEventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	observableEventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -127,7 +127,7 @@ func BenchmarkPublishSyncNoObservability(b *testing.B) {
 
 	// Add a subscriber to avoid messages being dropped
 	subscriber := &NoOpSubscriber{}
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -148,7 +148,7 @@ func BenchmarkThroughput(b *testing.B) {
 
 	// Add a subscriber
 	subscriber := &NoOpSubscriber{}
-	eventBus.Subscribe(context.Background(), subscriber, "test/topic")
+	eventBus.Subscribe(context.Background(), "test/topic", subscriber)
 
 	// Measure messages per second
 	start := time.Now()

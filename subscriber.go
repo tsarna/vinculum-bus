@@ -38,6 +38,29 @@ func (b *BaseSubscriber) PassThrough(msg EventBusMessage) error {
 	return nil
 }
 
+// EventReceiverWrapper is wrapper for converting a function to a Subscriber.
+
+type EventReceiver func(ctx context.Context, topic string, message any, fields map[string]string) error
+
+func NewEventReceiver(receiver EventReceiver) Subscriber {
+	return &eventReceiverWrapper{
+		BaseSubscriber: BaseSubscriber{},
+		receiver:       receiver,
+	}
+}
+
+type eventReceiverWrapper struct {
+	BaseSubscriber
+	receiver EventReceiver
+}
+
+func (w *eventReceiverWrapper) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	return w.receiver(ctx, topic, message, fields)
+}
+
+// Matcher is a function that matches a topic and returns true and a map of fields if the topic matches,
+// otherwise false and nil.
+
 type matcher func(topic string) (bool, map[string]string)
 
 func makeMatcher(subscribeMsg EventBusMessage) matcher {
