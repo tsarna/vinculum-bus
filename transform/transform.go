@@ -126,21 +126,39 @@ func RateLimitByTopic(minInterval time.Duration) MessageTransformFunc {
 //	transforms := []MessageTransformFunc{securityPipeline, otherTransform}
 func ChainTransforms(transforms ...MessageTransformFunc) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
-		current := msg
-		for _, transform := range transforms {
-			if current == nil {
-				return nil, true // Previous transform dropped message
-			}
-
-			transformed, continueProcessing := transform(current)
-			current = transformed
-
-			if current == nil || !continueProcessing {
-				return current, continueProcessing
-			}
-		}
-		return current, true
+		return TransformMessage(msg, transforms)
 	}
+}
+
+// TransformMessage applies a list of transforms to a message.
+// It returns the transformed message and a boolean indicating whether to continue processing.
+func TransformMessage(msg *bus.EventBusMessage, transforms []MessageTransformFunc) (*bus.EventBusMessage, bool) {
+	current := msg
+	for _, transform := range transforms {
+		if current == nil {
+			return nil, true // Previous transform dropped message
+		}
+
+		transformed, continueProcessing := transform(current)
+		current = transformed
+
+		if current == nil || !continueProcessing {
+			return current, continueProcessing
+		}
+	}
+
+	return current, true
+}
+
+func ApplyTransforms(ctx context.Context, topic string, payload any, transforms []MessageTransformFunc) (*bus.EventBusMessage, bool) {
+	msg := &bus.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: bus.MessageTypeEvent,
+		Topic:   topic,
+		Payload: payload,
+	}
+
+	return TransformMessage(msg, transforms)
 }
 
 // SimpleMessageTransformFunc is a simple function that transforms the message payload.

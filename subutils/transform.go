@@ -3,7 +3,7 @@ package subutils
 import (
 	"context"
 
-	"github.com/tsarna/vinculum-bus"
+	bus "github.com/tsarna/vinculum-bus"
 	"github.com/tsarna/vinculum-bus/transform"
 )
 
@@ -60,35 +60,11 @@ func (t *TransformingSubscriber) OnEvent(ctx context.Context, topic string, mess
 		return t.wrapped.OnEvent(ctx, topic, message, fields)
 	}
 
-	// Create an EventBusMessage for the transform pipeline
-	eventMsg := &bus.EventBusMessage{
-		Ctx:     ctx,
-		MsgType: bus.MessageTypeEvent,
-		Topic:   topic,
-		Payload: message,
-	}
-
-	// Apply transforms in order
-	current := eventMsg
-	for _, transformFunc := range t.transforms {
-		if current == nil {
-			// Previous transform dropped the message, stop processing
-			return nil
-		}
-
-		transformed, continueProcessing := transformFunc(current)
-		current = transformed
-
-		if !continueProcessing {
-			// Transform requested to stop processing, but we have a message
-			// So we'll pass it to the wrapped subscriber and stop
-			break
-		}
-	}
+	transformed, _ := transform.ApplyTransforms(ctx, topic, message, t.transforms)
 
 	// If we have a transformed message, pass it to the wrapped subscriber
-	if current != nil {
-		return t.wrapped.OnEvent(ctx, current.Topic, current.Payload, fields)
+	if transformed != nil {
+		return t.wrapped.OnEvent(ctx, transformed.Topic, transformed.Payload, fields)
 	}
 
 	// Message was dropped, don't call wrapped subscriber

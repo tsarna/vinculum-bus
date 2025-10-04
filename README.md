@@ -2,7 +2,7 @@
 
 "The [vinculum is the] processing device at the core of every Borg vessel.
 It interconnects the minds of all the drones."
-    -- Seven of Nine (In Voyager episode "Infinite Regress")
+   -- Seven of Nine (In Voyager episode "Infinite Regress")
 
 vinculum-bus is the core event bus functionality of Vinculum.  It's a
 high-performance, feature-rich in-process EventBus for Go with
