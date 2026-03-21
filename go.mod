@@ -2,7 +2,7 @@ module github.com/tsarna/vinculum-bus
 
 go 1.25.8
 
-require go.uber.org/zap v1.27.0
+require go.uber.org/zap v1.27.1
 
 require (
 	github.com/amir-yaghoubi/mqttpattern v0.0.0-20250829083210-f7d8d46a786e
