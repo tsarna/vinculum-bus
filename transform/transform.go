@@ -88,6 +88,30 @@ func AddTopicPrefix(prefix string) MessageTransformFunc {
 	}
 }
 
+// ReplaceInTopic returns a MessageTransformFunc that replaces all occurrences
+// of old with new in each message topic. Analogous to strings.ReplaceAll.
+//
+// Example:
+//
+//	transforms := []MessageTransformFunc{
+//	    ReplaceInTopic("/", "."), // "sensor/temp/reading" becomes "sensor.temp.reading"
+//	}
+func ReplaceInTopic(old, new string) MessageTransformFunc {
+	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		replaced := strings.ReplaceAll(msg.Topic, old, new)
+		if replaced == msg.Topic {
+			return msg, true // no change, avoid allocation
+		}
+		modified := &bus.EventBusMessage{
+			Ctx:     msg.Ctx,
+			MsgType: msg.MsgType,
+			Topic:   replaced,
+			Payload: msg.Payload,
+		}
+		return modified, true
+	}
+}
+
 // RateLimitByTopic returns a MessageTransformFunc that implements
 // simple rate limiting per topic pattern.
 //
