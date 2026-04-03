@@ -13,7 +13,6 @@ type MetricsPublisher interface {
 // ObservabilityConfig holds optional observability providers
 type ObservabilityConfig struct {
 	MetricsProvider MetricsProvider
-	TracingProvider TracingProvider
 	ServiceName     string
 	ServiceVersion  string
 }
@@ -23,11 +22,6 @@ type MetricsProvider interface {
 	Counter(name string) Counter
 	Histogram(name string) Histogram
 	Gauge(name string) Gauge
-}
-
-// TracingProvider abstracts distributed tracing (can be implemented with OpenTelemetry, Jaeger, etc.)
-type TracingProvider interface {
-	StartSpan(ctx context.Context, name string) (context.Context, Span)
 }
 
 // Counter represents a monotonically increasing metric
@@ -45,24 +39,8 @@ type Gauge interface {
 	Set(ctx context.Context, value float64, labels ...Label)
 }
 
-// Span represents a unit of work in a trace
-type Span interface {
-	SetAttributes(labels ...Label)
-	SetStatus(code SpanStatusCode, description string)
-	End()
-}
-
 // Label represents a key-value pair for metrics and tracing
 type Label struct {
 	Key   string
 	Value string
 }
-
-// SpanStatusCode represents the status of a span
-type SpanStatusCode int
-
-const (
-	SpanStatusUnset SpanStatusCode = iota
-	SpanStatusOK
-	SpanStatusError
-)

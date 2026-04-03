@@ -9,7 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tsarna/vinculum-bus/o11y"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -117,17 +121,6 @@ type mockGauge struct{}
 
 func (m *mockGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {}
 
-type mockTracingProvider struct{}
-
-func (m *mockTracingProvider) StartSpan(ctx context.Context, name string) (context.Context, o11y.Span) {
-	return ctx, &mockSpan{}
-}
-
-type mockSpan struct{}
-
-func (m *mockSpan) SetAttributes(labels ...o11y.Label)                     {}
-func (m *mockSpan) SetStatus(code o11y.SpanStatusCode, description string) {}
-func (m *mockSpan) End()                                                   {}
 
 func TestNewEventBus(t *testing.T) {
 	logger := zaptest.NewLogger(t)
@@ -196,14 +189,13 @@ func TestEventBusBuilder_WithBufferSize(t *testing.T) {
 	}
 }
 
-func TestEventBusBuilder_WithObservability(t *testing.T) {
+func TestEventBusBuilder_WithMetrics(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mockMetrics := &mockMetricsProvider{}
-	mockTracing := &mockTracingProvider{}
 
 	eventBus, err := NewEventBus().
 		WithLogger(logger).
-		WithObservability(mockMetrics, mockTracing).
+		WithMetrics(mockMetrics).
 		WithServiceInfo("test-service", "1.0.0").
 		Build()
 
@@ -215,20 +207,17 @@ func TestEventBusBuilder_WithObservability(t *testing.T) {
 	if b.metricsProvider != mockMetrics {
 		t.Error("Expected metrics provider to be set")
 	}
-	if b.tracingProvider != mockTracing {
-		t.Error("Expected tracing provider to be set")
-	}
 }
 
-func TestEventBusBuilder_WithMetricsAndTracing(t *testing.T) {
+func TestEventBusBuilder_WithTracerProvider(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	mockMetrics := &mockMetricsProvider{}
-	mockTracing := &mockTracingProvider{}
+	tp := sdktrace.NewTracerProvider()
+	defer tp.Shutdown(context.Background()) //nolint:errcheck
 
 	eventBus, err := NewEventBus().
 		WithLogger(logger).
-		WithMetrics(mockMetrics).
-		WithTracing(mockTracing).
+		WithTracerProvider(tp).
+		WithName("mybus").
 		Build()
 
 	if err != nil {
@@ -236,11 +225,8 @@ func TestEventBusBuilder_WithMetricsAndTracing(t *testing.T) {
 	}
 
 	b := eventBus.(*basicEventBus)
-	if b.metricsProvider != mockMetrics {
-		t.Error("Expected metrics provider to be set")
-	}
-	if b.tracingProvider != mockTracing {
-		t.Error("Expected tracing provider to be set")
+	if b.tracer == nil {
+		t.Error("Expected tracer to be set")
 	}
 }
 
@@ -286,10 +272,11 @@ func TestEventBusBuilder_FluentInterface(t *testing.T) {
 		t.Error("WithMetrics should return the same builder instance")
 	}
 
-	mockTracing := &mockTracingProvider{}
-	result4 := builder.WithTracing(mockTracing)
+	tp := sdktrace.NewTracerProvider()
+	defer tp.Shutdown(context.Background()) //nolint:errcheck
+	result4 := builder.WithTracerProvider(tp)
 	if result4 != builder {
-		t.Error("WithTracing should return the same builder instance")
+		t.Error("WithTracerProvider should return the same builder instance")
 	}
 
 	result5 := builder.WithServiceInfo("test", "1.0")
@@ -1772,4 +1759,125 @@ func TestEventBusSubscribeFunc(t *testing.T) {
 			t.Error("Expected nil subscriber when SubscribeFunc fails")
 		}
 	})
+}
+
+// ── Tracing tests ─────────────────────────────────────────────────────────────
+
+func setupTestTracer(t *testing.T) (*tracetest.InMemoryExporter, *sdktrace.TracerProvider) {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { tp.Shutdown(context.Background()) }) //nolint:errcheck
+	return exporter, tp
+}
+
+func makeTracedBus(t *testing.T, tp *sdktrace.TracerProvider) EventBus {
+	t.Helper()
+	eb, err := NewEventBus().
+		WithLogger(zaptest.NewLogger(t)).
+		WithTracerProvider(tp).
+		WithName("testbus").
+		Build()
+	require.NoError(t, err)
+	require.NoError(t, eb.Start())
+	t.Cleanup(func() { eb.Stop() })
+	return eb
+}
+
+func TestTracing_PublishCreatesProducerSpan(t *testing.T) {
+	exporter, tp := setupTestTracer(t)
+	eb := makeTracedBus(t, tp)
+
+	err := eb.Publish(context.Background(), "a/b", "msg")
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond) // let the goroutine flush
+
+	spans := exporter.GetSpans()
+	var publishSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "publish a/b" {
+			publishSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, publishSpan, "expected a publish span")
+	assert.Equal(t, "producer", publishSpan.SpanKind.String())
+}
+
+func TestTracing_PublishSyncCreatesProducerAndChildConsumerSpans(t *testing.T) {
+	exporter, tp := setupTestTracer(t)
+	eb := makeTracedBus(t, tp)
+
+	target := &MockSubscriber{}
+	require.NoError(t, eb.Subscribe(context.Background(), "a/b", target))
+	require.NoError(t, eb.PublishSync(context.Background(), "a/b", "msg"))
+
+	spans := exporter.GetSpans()
+
+	var publishSpan, deliverSpan *tracetest.SpanStub
+	for i := range spans {
+		switch spans[i].Name {
+		case "publish a/b":
+			publishSpan = &spans[i]
+		case "process a/b":
+			deliverSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, publishSpan, "expected a publish span")
+	require.NotNil(t, deliverSpan, "expected a process span")
+
+	assert.Equal(t, "producer", publishSpan.SpanKind.String())
+	assert.Equal(t, "consumer", deliverSpan.SpanKind.String())
+
+	// delivery span is a child of the publish span (same trace, parent = publish)
+	assert.Equal(t, publishSpan.SpanContext.TraceID(), deliverSpan.SpanContext.TraceID(),
+		"deliver span should be in the same trace as publish span")
+	assert.Equal(t, publishSpan.SpanContext.SpanID(), deliverSpan.Parent.SpanID(),
+		"deliver span parent should be the publish span")
+}
+
+func TestTracing_AsyncPublishCreatesLinkedConsumerSpan(t *testing.T) {
+	exporter, tp := setupTestTracer(t)
+	eb := makeTracedBus(t, tp)
+
+	target := &MockSubscriber{}
+	require.NoError(t, eb.Subscribe(context.Background(), "a/b", target))
+	require.NoError(t, eb.Publish(context.Background(), "a/b", "msg"))
+
+	// Wait for async delivery
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		target.mu.RLock()
+		n := len(target.events)
+		target.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	spans := exporter.GetSpans()
+	var publishSpan, deliverSpan *tracetest.SpanStub
+	for i := range spans {
+		switch spans[i].Name {
+		case "publish a/b":
+			publishSpan = &spans[i]
+		case "process a/b":
+			deliverSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, publishSpan, "expected a publish span")
+	require.NotNil(t, deliverSpan, "expected a process span")
+
+	assert.Equal(t, "consumer", deliverSpan.SpanKind.String())
+
+	// delivery span is a new root (different trace from publish)
+	assert.NotEqual(t, publishSpan.SpanContext.TraceID(), deliverSpan.SpanContext.TraceID(),
+		"async deliver span should be a new root trace, not a child of publish")
+
+	// delivery span has a link to the publish span
+	require.Len(t, deliverSpan.Links, 1, "expected one link on the deliver span")
+	assert.Equal(t, publishSpan.SpanContext.TraceID(), deliverSpan.Links[0].SpanContext.TraceID(),
+		"link should point to the publish span's trace")
+	assert.Equal(t, publishSpan.SpanContext.SpanID(), deliverSpan.Links[0].SpanContext.SpanID(),
+		"link should point to the publish span")
 }

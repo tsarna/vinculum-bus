@@ -9,6 +9,10 @@ import (
 
 	"github.com/amir-yaghoubi/mqttpattern"
 	"github.com/tsarna/vinculum-bus/o11y"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -79,7 +83,7 @@ type basicEventBus struct {
 
 	// Observability (nil if not configured)
 	metricsProvider o11y.MetricsProvider
-	tracingProvider o11y.TracingProvider
+	tracer          trace.Tracer
 
 	// Pre-created metrics (lazy loaded)
 	publishCounter     o11y.Counter
@@ -93,7 +97,6 @@ type basicEventBus struct {
 
 func (b *basicEventBus) setupObservability(config *o11y.ObservabilityConfig) {
 	b.metricsProvider = config.MetricsProvider
-	b.tracingProvider = config.TracingProvider
 
 	if b.metricsProvider != nil {
 		// Create metrics instruments
@@ -105,6 +108,19 @@ func (b *basicEventBus) setupObservability(config *o11y.ObservabilityConfig) {
 		b.latencyHistogram = b.metricsProvider.Histogram("eventbus_publish_duration_seconds")
 		b.subscriberGauge = b.metricsProvider.Gauge("eventbus_active_subscribers")
 	}
+}
+
+// messagingAttrs returns the common OTel messaging semantic convention attributes
+// for a span on this bus.
+func (b *basicEventBus) messagingAttrs(topic string) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		semconv.MessagingDestinationNameKey.String(topic),
+		semconv.MessagingSystemKey.String("vinculum"),
+	}
+	if b.busName != "" {
+		attrs = append(attrs, attribute.String("vinculum.bus.name", b.busName))
+	}
+	return attrs
 }
 
 // Start begins the event bus's message processing goroutine
@@ -125,22 +141,14 @@ func (b *basicEventBus) Start() error {
 			case msg := <-b.ch: // Thread-safe channel operation
 				switch msg.MsgType {
 				case MessageTypeEvent:
-					// Extract context from message (guaranteed non-nil by public API)
+					// Extract context from message (guaranteed non-nil by public API).
+					// ctx carries the publish span context; extract it to link delivery spans.
 					ctx := msg.Ctx
 
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
 							if ok, fields := matcher(msg.Topic); ok {
-								err := subscriber.OnEvent(ctx, msg.Topic, msg.Payload, fields)
-								if err != nil {
-									b.logger.Error("Error in OnEvent", zap.Error(err))
-									if b.errorCounter != nil {
-										b.errorCounter.Add(ctx, 1,
-											o11y.Label{Key: "operation", Value: "on_event"},
-											o11y.Label{Key: "topic", Value: msg.Topic},
-										)
-									}
-								}
+								b.deliverAsync(ctx, msg.Topic, msg.Payload, fields, subscriber)
 								break
 							}
 						}
@@ -200,22 +208,68 @@ func (b *basicEventBus) Start() error {
 	return nil
 }
 
+// deliverAsync delivers one async event to a single subscriber, wrapped in a new-root consumer
+// span linked to the publish span (per OTel messaging semantic conventions for async pub/sub).
+func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload any, fields map[string]string, subscriber Subscriber) {
+	if b.tracer != nil {
+		publishSpanCtx := trace.SpanFromContext(ctx).SpanContext()
+		spanOpts := []trace.SpanStartOption{
+			trace.WithNewRoot(),
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(append(b.messagingAttrs(topic),
+				semconv.MessagingOperationTypeDeliver,
+				semconv.MessagingOperationNameKey.String("process"),
+			)...),
+		}
+		if publishSpanCtx.IsValid() {
+			spanOpts = append(spanOpts, trace.WithLinks(trace.Link{SpanContext: publishSpanCtx}))
+		}
+		var deliverySpan trace.Span
+		ctx, deliverySpan = b.tracer.Start(context.Background(), "process "+topic, spanOpts...)
+		defer deliverySpan.End()
+
+		if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
+			b.logger.Error("Error in OnEvent", zap.Error(err))
+			deliverySpan.RecordError(err)
+			deliverySpan.SetStatus(codes.Error, err.Error())
+			if b.errorCounter != nil {
+				b.errorCounter.Add(ctx, 1,
+					o11y.Label{Key: "operation", Value: "on_event"},
+					o11y.Label{Key: "topic", Value: topic},
+				)
+			}
+		}
+		return
+	}
+
+	if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
+		b.logger.Error("Error in OnEvent", zap.Error(err))
+		if b.errorCounter != nil {
+			b.errorCounter.Add(ctx, 1,
+				o11y.Label{Key: "operation", Value: "on_event"},
+				o11y.Label{Key: "topic", Value: topic},
+			)
+		}
+	}
+}
+
 func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) error {
-	// Use the provided context instead of creating a new one
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// Start tracing span if available
-	if b.tracingProvider != nil {
-		var span o11y.Span
-		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.publish")
-		defer span.End()
-
-		span.SetAttributes(
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "operation", Value: "publish"},
+	// Producer span: ends when the message is enqueued. The span context is
+	// stored in ctx and carried in the message so async delivery spans can link to it.
+	if b.tracer != nil {
+		var span trace.Span
+		ctx, span = b.tracer.Start(ctx, "publish "+topic,
+			trace.WithSpanKind(trace.SpanKindProducer),
+			trace.WithAttributes(append(b.messagingAttrs(topic),
+				semconv.MessagingOperationTypePublish,
+				semconv.MessagingOperationNameKey.String("publish"),
+			)...),
 		)
+		defer span.End()
 	}
 
 	// Record metrics if available
@@ -233,22 +287,22 @@ func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) 
 }
 
 func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload any) error {
-	// Use the provided context instead of creating a new one
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	start := time.Now()
 
-	// Start tracing span if available
-	var span o11y.Span
-	if b.tracingProvider != nil {
-		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.publish_sync")
-		defer span.End()
-
-		span.SetAttributes(
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "operation", Value: "publish_sync"},
+	// Producer span wrapping the entire synchronous call (enqueue + all subscriber delivery).
+	var span trace.Span
+	if b.tracer != nil {
+		ctx, span = b.tracer.Start(ctx, "publish "+topic,
+			trace.WithSpanKind(trace.SpanKindProducer),
+			trace.WithAttributes(append(b.messagingAttrs(topic),
+				semconv.MessagingOperationTypePublish,
+				semconv.MessagingOperationNameKey.String("publish"),
+			)...),
 		)
+		defer span.End()
 	}
 
 	responseCh := make(chan error, 1)
@@ -264,29 +318,27 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 
 	err := <-responseCh
 
-	// Record metrics and span status
+	// Record metrics
 	if b.publishSyncCounter != nil {
-		labels := []o11y.Label{
-			{Key: "topic", Value: topic},
-		}
+		status := "success"
 		if err != nil {
-			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
-		} else {
-			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
+			status = "error"
 		}
-		b.publishSyncCounter.Add(ctx, 1, labels...)
+		b.publishSyncCounter.Add(ctx, 1,
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "status", Value: status},
+		)
 	}
-
 	if b.latencyHistogram != nil {
-		duration := time.Since(start).Seconds()
-		b.latencyHistogram.Record(ctx, duration, o11y.Label{Key: "topic", Value: topic})
+		b.latencyHistogram.Record(ctx, time.Since(start).Seconds(), o11y.Label{Key: "topic", Value: topic})
 	}
 
 	if span != nil {
 		if err != nil {
-			span.SetStatus(o11y.SpanStatusError, err.Error())
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 		} else {
-			span.SetStatus(o11y.SpanStatusOK, "")
+			span.SetStatus(codes.Ok, "")
 		}
 	}
 
@@ -294,21 +346,8 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 }
 
 func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber Subscriber) error {
-	// Use the provided context instead of creating a new one
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	// Start tracing span if available
-	var span o11y.Span
-	if b.tracingProvider != nil {
-		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.subscribe")
-		defer span.End()
-
-		span.SetAttributes(
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "operation", Value: "subscribe"},
-		)
 	}
 
 	msgType := MessageTypeSubscribe
@@ -329,31 +368,21 @@ func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber 
 
 	err := <-responseCh
 
-	// Record metrics and span status
 	if b.subscribeCounter != nil {
-		labels := []o11y.Label{
-			{Key: "topic", Value: topic},
-		}
+		status := "success"
 		if err != nil {
-			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
-		} else {
-			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
+			status = "error"
 		}
-		b.subscribeCounter.Add(ctx, 1, labels...)
-	}
-
-	if span != nil {
-		if err != nil {
-			span.SetStatus(o11y.SpanStatusError, err.Error())
-		} else {
-			span.SetStatus(o11y.SpanStatusOK, "")
-		}
+		b.subscribeCounter.Add(ctx, 1,
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "status", Value: status},
+		)
 	}
 
 	return err
 }
 
-// SubscribeFunc subscribes a funtion to a topic. Returns a Subscriber that can be passed to Unsubscribe.
+// SubscribeFunc subscribes a function to a topic. Returns a Subscriber that can be passed to Unsubscribe.
 func (b *basicEventBus) SubscribeFunc(ctx context.Context, topic string, receiver EventReceiver) (Subscriber, error) {
 	subscriber := NewEventReceiver(receiver)
 	err := b.Subscribe(ctx, topic, subscriber)
@@ -369,18 +398,6 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscribe
 		ctx = context.Background()
 	}
 
-	// Start tracing span if available
-	var span o11y.Span
-	if b.tracingProvider != nil {
-		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe")
-		defer span.End()
-
-		span.SetAttributes(
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "operation", Value: "unsubscribe"},
-		)
-	}
-
 	responseCh := make(chan error, 1)
 	b.acceptWithResponse(EventBusMessage{
 		MsgType: MessageTypeUnsubscribe,
@@ -394,25 +411,15 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscribe
 
 	err := <-responseCh
 
-	// Record metrics and span status
 	if b.unsubscribeCounter != nil {
-		labels := []o11y.Label{
-			{Key: "topic", Value: topic},
-		}
+		status := "success"
 		if err != nil {
-			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
-		} else {
-			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
+			status = "error"
 		}
-		b.unsubscribeCounter.Add(ctx, 1, labels...)
-	}
-
-	if span != nil {
-		if err != nil {
-			span.SetStatus(o11y.SpanStatusError, err.Error())
-		} else {
-			span.SetStatus(o11y.SpanStatusOK, "")
-		}
+		b.unsubscribeCounter.Add(ctx, 1,
+			o11y.Label{Key: "topic", Value: topic},
+			o11y.Label{Key: "status", Value: status},
+		)
 	}
 
 	return err
@@ -421,17 +428,6 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscribe
 func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscriber) error {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	// Start tracing span if available
-	var span o11y.Span
-	if b.tracingProvider != nil {
-		ctx, span = b.tracingProvider.StartSpan(ctx, "eventbus.unsubscribe_all")
-		defer span.End()
-
-		span.SetAttributes(
-			o11y.Label{Key: "operation", Value: "unsubscribe_all"},
-		)
 	}
 
 	responseCh := make(chan error, 1)
@@ -447,26 +443,16 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 
 	err := <-responseCh
 
-	// Record metrics and span status
 	if b.unsubscribeCounter != nil {
-		labels := []o11y.Label{
-			{Key: "topic", Value: "*"}, // Use "*" to indicate all topics
-		}
+		status := "success"
 		if err != nil {
-			labels = append(labels, o11y.Label{Key: "status", Value: "error"})
-		} else {
-			labels = append(labels, o11y.Label{Key: "status", Value: "success"})
+			status = "error"
 		}
 		// For UnsubscribeAll, we increment by 1 operation (not the count of subscriptions)
-		b.unsubscribeCounter.Add(ctx, 1, labels...)
-	}
-
-	if span != nil {
-		if err != nil {
-			span.SetStatus(o11y.SpanStatusError, err.Error())
-		} else {
-			span.SetStatus(o11y.SpanStatusOK, "")
-		}
+		b.unsubscribeCounter.Add(ctx, 1,
+			o11y.Label{Key: "topic", Value: "*"},
+			o11y.Label{Key: "status", Value: status},
+		)
 	}
 
 	return err
@@ -537,26 +523,12 @@ func (b *basicEventBus) doUnsubscribeAll(msg EventBusMessage) error {
 	// Extract context from the message (guaranteed non-nil by public API)
 	ctx := msg.Ctx
 
-	// Count how many subscriptions we're removing for metrics
-	subscriptionCount := 0
-	if currentSubscriptions, exists := b.subscriptions[subscriber]; exists {
-		subscriptionCount = len(currentSubscriptions)
-	}
-
 	delete(b.subscriptions, subscriber)
 
 	// Update subscriber gauge
 	if b.subscriberGauge != nil {
 		subscriberCount := float64(len(b.subscriptions))
 		b.subscriberGauge.Set(ctx, subscriberCount)
-	}
-
-	// Add subscription count to tracing if available
-	if b.tracingProvider != nil {
-		// Get the current span from context if it exists
-		// This is a simplified approach - in a real implementation you might want to extract the span
-		// For now, we'll just log the count
-		b.logger.Debug("UnsubscribeAll completed", zap.Int("subscription_count", subscriptionCount))
 	}
 
 	err := subscriber.OnUnsubscribe(ctx, "")
@@ -570,19 +542,17 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 	// Extract context from the message (guaranteed non-nil by public API)
 	ctx := msg.Ctx
 
-	// Process the message just like a regular event, but track any errors
+	// Process each matching subscriber, wrapping each delivery in a child consumer span.
 	var publishError error
-	eventCount := 0
 
 	for subscriber := range b.subscriptions {
 		for _, matcher := range b.subscriptions[subscriber] {
 			if ok, fields := matcher(msg.Topic); ok {
-				eventCount++
-				if err := subscriber.OnEvent(ctx, msg.Topic, req.payload, fields); err != nil {
+				err := b.deliverSync(ctx, msg.Topic, req.payload, fields, subscriber)
+				if err != nil {
 					if publishError == nil {
-						publishError = err // Store first error
+						publishError = err // store first error
 					} else {
-						// log any additional errors
 						b.logger.Error("Error in OnEvent during sync publish", zap.Error(err))
 					}
 				}
@@ -594,6 +564,30 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 	// Send response back to caller
 	req.responseCh <- publishError
 	return publishError
+}
+
+// deliverSync delivers one sync event to a single subscriber, wrapped in a child consumer span.
+func (b *basicEventBus) deliverSync(ctx context.Context, topic string, payload any, fields map[string]string, subscriber Subscriber) error {
+	if b.tracer != nil {
+		var deliverySpan trace.Span
+		ctx, deliverySpan = b.tracer.Start(ctx, "process "+topic,
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(append(b.messagingAttrs(topic),
+				semconv.MessagingOperationTypeDeliver,
+				semconv.MessagingOperationNameKey.String("process"),
+			)...),
+		)
+		defer deliverySpan.End()
+
+		err := subscriber.OnEvent(ctx, topic, payload, fields)
+		if err != nil {
+			deliverySpan.RecordError(err)
+			deliverySpan.SetStatus(codes.Error, err.Error())
+		}
+		return err
+	}
+
+	return subscriber.OnEvent(ctx, topic, payload, fields)
 }
 
 // accept sends a message to the event bus's channel (for publish operations - no response needed)

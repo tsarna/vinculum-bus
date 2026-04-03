@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tsarna/vinculum-bus/o11y"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -14,7 +15,7 @@ type EventBusBuilder struct {
 	bufferSize      int
 	busName         string
 	metricsProvider o11y.MetricsProvider
-	tracingProvider o11y.TracingProvider
+	tracerProvider  trace.TracerProvider
 	serviceName     string
 	serviceVersion  string
 }
@@ -50,16 +51,9 @@ func (b *EventBusBuilder) WithMetrics(provider o11y.MetricsProvider) *EventBusBu
 	return b
 }
 
-// WithTracing sets the tracing provider for the EventBus
-func (b *EventBusBuilder) WithTracing(provider o11y.TracingProvider) *EventBusBuilder {
-	b.tracingProvider = provider
-	return b
-}
-
-// WithObservability sets both metrics and tracing providers for the EventBus
-func (b *EventBusBuilder) WithObservability(metrics o11y.MetricsProvider, tracing o11y.TracingProvider) *EventBusBuilder {
-	b.metricsProvider = metrics
-	b.tracingProvider = tracing
+// WithTracerProvider sets the OTel TracerProvider for the EventBus
+func (b *EventBusBuilder) WithTracerProvider(provider trace.TracerProvider) *EventBusBuilder {
+	b.tracerProvider = provider
 	return b
 }
 
@@ -96,25 +90,32 @@ func (b *EventBusBuilder) Build() (EventBus, error) {
 		logger = zap.NewNop()
 	}
 
+	busName := b.busName
+
 	ctx, cancel := context.WithCancel(context.Background())
 	eb := &basicEventBus{
-		ch:              make(chan EventBusMessage, b.bufferSize),
-		ctx:             ctx,
-		cancel:          cancel,
-		subscriptions:   make(map[Subscriber]map[string]matcher),
-		logger:          logger,
-		busName:         b.busName,
-		metricsProvider: b.metricsProvider,
-		tracingProvider: b.tracingProvider,
+		ch:            make(chan EventBusMessage, b.bufferSize),
+		ctx:           ctx,
+		cancel:        cancel,
+		subscriptions: make(map[Subscriber]map[string]matcher),
+		logger:        logger,
+		busName:       busName,
 	}
 
 	if b.metricsProvider != nil {
 		eb.setupObservability(&o11y.ObservabilityConfig{
 			MetricsProvider: b.metricsProvider,
-			TracingProvider: b.tracingProvider,
 			ServiceName:     b.serviceName,
 			ServiceVersion:  b.serviceVersion,
 		})
+	}
+
+	if b.tracerProvider != nil {
+		scope := "vinculum-bus"
+		if busName != "" {
+			scope = "vinculum-bus/" + busName
+		}
+		eb.tracer = b.tracerProvider.Tracer(scope)
 	}
 
 	return eb, nil

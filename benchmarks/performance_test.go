@@ -94,7 +94,7 @@ func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
 	// Create observable EventBus with OpenTelemetry
 	observableEventBus, err := bus.NewEventBus().
 		WithLogger(logger).
-		WithObservability(otelProvider, otelProvider).
+		WithMetrics(otelProvider).
 		WithServiceInfo("benchmark", "v1.0.0").
 		Build()
 	if err != nil {
