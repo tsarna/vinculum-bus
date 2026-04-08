@@ -4,20 +4,20 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tsarna/vinculum-bus/o11y"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // EventBusBuilder provides a fluent interface for creating EventBus instances
 type EventBusBuilder struct {
-	logger          *zap.Logger
-	bufferSize      int
-	busName         string
-	metricsProvider o11y.MetricsProvider
-	tracerProvider  trace.TracerProvider
-	serviceName     string
-	serviceVersion  string
+	logger         *zap.Logger
+	bufferSize     int
+	busName        string
+	meterProvider  metric.MeterProvider
+	tracerProvider trace.TracerProvider
+	serviceName    string
+	serviceVersion string
 }
 
 // NewEventBus creates a new EventBusBuilder
@@ -45,9 +45,9 @@ func (b *EventBusBuilder) WithBufferSize(size int) *EventBusBuilder {
 	return b
 }
 
-// WithMetrics sets the metrics provider for the EventBus
-func (b *EventBusBuilder) WithMetrics(provider o11y.MetricsProvider) *EventBusBuilder {
-	b.metricsProvider = provider
+// WithMeterProvider sets the OTel MeterProvider for the EventBus
+func (b *EventBusBuilder) WithMeterProvider(provider metric.MeterProvider) *EventBusBuilder {
+	b.meterProvider = provider
 	return b
 }
 
@@ -102,12 +102,8 @@ func (b *EventBusBuilder) Build() (EventBus, error) {
 		busName:       busName,
 	}
 
-	if b.metricsProvider != nil {
-		eb.setupObservability(&o11y.ObservabilityConfig{
-			MetricsProvider: b.metricsProvider,
-			ServiceName:     b.serviceName,
-			ServiceVersion:  b.serviceVersion,
-		})
+	if b.meterProvider != nil {
+		eb.setupMetrics(b.meterProvider)
 	}
 
 	if b.tracerProvider != nil {

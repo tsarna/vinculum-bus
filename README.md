@@ -130,20 +130,10 @@ if err != nil {
 // With observability
 eventBus, err := bus.NewEventBus().
     WithLogger(logger).
-    WithObservability(metricsProvider, tracingProvider).
+    WithMeterProvider(meterProvider).
+    WithTracerProvider(tracerProvider).
     WithServiceInfo("my-service", "v1.0.0").
     WithBufferSize(1500).
-    Build()
-if err != nil {
-    return err
-}
-
-// Step by step configuration
-eventBus, err := bus.NewEventBus().
-    WithLogger(logger).
-    WithMetrics(metricsProvider).
-    WithTracing(tracingProvider).
-    WithBufferSize(500).
     Build()
 if err != nil {
     return err
@@ -177,59 +167,63 @@ eventBus.Publish(ctx, "users/123/orders/456", orderData)
 // fields = {"userId": "123", "orderId": "456"}
 ```
 
-## 📊 Observability Options
+## 📊 Observability
 
-### 1. OpenTelemetry Integration
+### OpenTelemetry Metrics
+
+The EventBus accepts a standard OTel `metric.MeterProvider`. Metrics follow
+OTel semantic conventions (`messaging.client.*` where applicable).
 
 ```go
-import "github.com/tsarna/vinculum-bus/otel"
-
-provider := otel.NewProvider("my-service", "v1.0.0")
 eventBus, err := bus.NewEventBus().
     WithLogger(logger).
-    WithObservability(provider, provider).
+    WithMeterProvider(meterProvider).
     WithServiceInfo("my-service", "v1.0.0").
     Build()
-if err != nil {
-    return err
-}
 ```
 
-### 2. Standalone Metrics (Zero Dependencies)
+### Standalone Metrics (publish to bus)
 
 ```go
 import "github.com/tsarna/vinculum-bus/o11y"
 
-// Self-contained metrics via EventBus
-metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
+// Creates an sdkmetric.MeterProvider that periodically exports metrics to a bus topic
+mp, exporter := o11y.NewStandaloneMeterProvider(eventBus, &o11y.StandaloneMetricsConfig{
     Interval:     30 * time.Second,  // Publish every 30s
     MetricsTopic: "$metrics",        // Topic for metrics
     ServiceName:  "my-service",
 })
+defer mp.Shutdown(ctx)
 
-metricsProvider.Start()
-defer metricsProvider.Stop()
+// Use the MeterProvider with the EventBus
+observableEventBus, _ := bus.NewEventBus().
+    WithMeterProvider(mp).
+    Build()
 
-// Subscribe to metrics
+// Subscribe to metrics snapshots
 eventBus.Subscribe(ctx, metricsCollector, "$metrics")
 ```
 
-#### Metrics JSON Format
+#### Metrics Snapshot Format
 ```json
 {
   "timestamp": "2025-08-28T23:02:30.773505-04:00",
   "service_name": "my-service",
   "counters": {
-    "eventbus_messages_published_total": 150,
-    "eventbus_messages_published_sync_total": 25,
-    "eventbus_subscriptions_total": 12,
-    "eventbus_errors_total": 0
+    "messaging.client.sent.messages": 175,
+    "eventbus.subscriptions": 12,
+    "messaging.client.errors": 0
   },
   "histograms": {
-    "eventbus_publish_duration_seconds": [0.001, 0.002, 0.001]
+    "messaging.client.operation.duration": {
+      "count": 25,
+      "sum": 0.045,
+      "bounds": [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
+      "bucket_counts": [10, 8, 5, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
   },
   "gauges": {
-    "eventbus_active_subscribers": 8
+    "eventbus.active_subscribers": 8
   }
 }
 ```

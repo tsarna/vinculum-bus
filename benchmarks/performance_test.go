@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 
 	bus "github.com/tsarna/vinculum-bus"
 	"github.com/tsarna/vinculum-bus/o11y"
-	"github.com/tsarna/vinculum-bus/otel"
 )
 
 // NoOpSubscriber for benchmarking - minimal overhead
@@ -51,19 +51,18 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	eventBus.Start()
 	defer eventBus.Stop()
 
-	// Create standalone metrics provider
-	metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
+	// Create standalone meter provider that publishes to the bus
+	mp, _ := o11y.NewStandaloneMeterProvider(eventBus, &o11y.StandaloneMetricsConfig{
 		Interval:     time.Minute, // Long interval for benchmarking
 		MetricsTopic: "$metrics",
 		ServiceName:  "benchmark",
 	})
-	metricsProvider.Start()
-	defer metricsProvider.Stop()
+	defer mp.Shutdown(context.Background()) //nolint:errcheck
 
 	// Create observable EventBus with standalone metrics
 	observableEventBus, err := bus.NewEventBus().
 		WithLogger(logger).
-		WithMetrics(metricsProvider).
+		WithMeterProvider(mp).
 		WithServiceInfo("benchmark", "v1.0.0").
 		Build()
 	if err != nil {
@@ -85,16 +84,13 @@ func BenchmarkPublishWithStandaloneMetrics(b *testing.B) {
 	}
 }
 
-func BenchmarkPublishWithOpenTelemetry(b *testing.B) {
+func BenchmarkPublishWithNoopMeterProvider(b *testing.B) {
 	logger := zap.NewNop()
 
-	// Create OpenTelemetry provider
-	otelProvider := otel.NewProvider("benchmark", "v1.0.0")
-
-	// Create observable EventBus with OpenTelemetry
+	// Create observable EventBus with noop meter provider
 	observableEventBus, err := bus.NewEventBus().
 		WithLogger(logger).
-		WithMetrics(otelProvider).
+		WithMeterProvider(noop.NewMeterProvider()).
 		WithServiceInfo("benchmark", "v1.0.0").
 		Build()
 	if err != nil {

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-08
+
+### Changed
+
+- **OTel metrics replaces o11y.MetricsProvider abstraction** — the `MetricsProvider`, `Counter`, `Histogram`, `Gauge`, `Label`, and `ObservabilityConfig` types have been removed from the `o11y` package. The event bus now accepts a `metric.MeterProvider` directly via `WithMeterProvider(metric.MeterProvider)` on the builder (replacing the removed `WithMetrics` method). This is a breaking API change.
+
+- **Metric names follow OTel semantic conventions** — standard `messaging.client.*` names are used where applicable (`messaging.client.sent.messages`, `messaging.client.operation.duration`, `messaging.client.errors`). Eventbus-specific metrics use an `eventbus.*` namespace (`eventbus.subscriptions`, `eventbus.unsubscriptions`, `eventbus.active_subscribers`). All metrics carry `messaging.system=eventbus`, `messaging.destination.name`, and `vinculum.bus.name` (when set) attributes.
+
+- **Standalone metrics provider rewritten as OTel SDK exporter** — `StandaloneMetricsProvider` is replaced by `StandaloneExporter` (implementing `sdkmetric.Exporter`) and `NewStandaloneMeterProvider()` which returns a standard `*sdkmetric.MeterProvider`. The OTel SDK handles aggregation and the periodic publish loop; the exporter converts metric data into `MetricsSnapshot` and publishes to the bus. Shutdown is now via `mp.Shutdown(ctx)` instead of `Stop()`.
+
+- **MetricsSnapshot format updated** — `Counters` changed from `map[string]int64` to `map[string]float64`. `Histograms` changed from `map[string][]float64` (raw values) to `map[string]HistogramSnapshot` (pre-aggregated buckets with `Count`, `Sum`, `Bounds`, `BucketCounts`).
+
+### Removed
+
+- **`otel` sub-package deleted** — the `otel.Provider` adapter (which bridged `o11y.MetricsProvider` to OTel) is no longer needed since consumers now use `metric.MeterProvider` directly.
+
 ## [0.10.0] - 2026-04-03
 
 ### Changed

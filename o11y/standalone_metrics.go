@@ -2,233 +2,164 @@ package o11y
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// StandaloneMetricsConfig configures the standalone metrics provider
+// StandaloneMetricsConfig configures the standalone metrics exporter.
 type StandaloneMetricsConfig struct {
 	Interval     time.Duration // How often to publish metrics (default: 30s)
 	MetricsTopic string        // Topic to publish metrics to (default: "$metrics")
 	ServiceName  string        // Service name to include in metrics
 }
 
-// MetricsSnapshot represents the metrics data published via MetricsPublisher
+// MetricsSnapshot represents the metrics data published via MetricsPublisher.
 type MetricsSnapshot struct {
-	Timestamp   time.Time            `json:"timestamp"`
-	ServiceName string               `json:"service_name"`
-	Counters    map[string]int64     `json:"counters"`
-	Histograms  map[string][]float64 `json:"histograms"`
-	Gauges      map[string]float64   `json:"gauges"`
+	Timestamp   time.Time                    `json:"timestamp"`
+	ServiceName string                       `json:"service_name"`
+	Counters    map[string]float64           `json:"counters"`
+	Histograms  map[string]HistogramSnapshot `json:"histograms"`
+	Gauges      map[string]float64           `json:"gauges"`
 }
 
-// StandaloneMetricsProvider collects metrics and publishes them via MetricsPublisher periodically
-type StandaloneMetricsProvider struct {
-	config    StandaloneMetricsConfig
-	publisher MetricsPublisher // Reference to the publisher to publish metrics to
-
-	// Thread-safe metric storage
-	counters   sync.Map // map[string]*standaloneCounter
-	histograms sync.Map // map[string]*standaloneHistogram
-	gauges     sync.Map // map[string]*standaloneGauge
-
-	// Control
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-
-	started int32 // atomic boolean
+// HistogramSnapshot holds pre-aggregated histogram data.
+type HistogramSnapshot struct {
+	Count        uint64    `json:"count"`
+	Sum          float64   `json:"sum"`
+	Bounds       []float64 `json:"bounds"`
+	BucketCounts []uint64  `json:"bucket_counts"`
 }
 
-// NewStandaloneMetricsProvider creates a new standalone metrics provider
-func NewStandaloneMetricsProvider(publisher MetricsPublisher, config *StandaloneMetricsConfig) *StandaloneMetricsProvider {
+// StandaloneExporter implements sdkmetric.Exporter by converting OTel metric
+// data into MetricsSnapshot and publishing it to a bus topic.
+type StandaloneExporter struct {
+	publisher   MetricsPublisher
+	topic       string
+	serviceName string
+	shutdown    bool
+}
+
+// NewStandaloneExporter creates a new standalone metrics exporter.
+func NewStandaloneExporter(publisher MetricsPublisher, config *StandaloneMetricsConfig) *StandaloneExporter {
 	if config == nil {
 		config = &StandaloneMetricsConfig{}
 	}
-
-	// Set defaults
-	if config.Interval == 0 {
-		config.Interval = 30 * time.Second
+	topic := config.MetricsTopic
+	if topic == "" {
+		topic = "$metrics"
 	}
-	if config.MetricsTopic == "" {
-		config.MetricsTopic = "$metrics"
+	serviceName := config.ServiceName
+	if serviceName == "" {
+		serviceName = "unknown"
 	}
-	if config.ServiceName == "" {
-		config.ServiceName = "unknown"
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &StandaloneMetricsProvider{
-		config:    *config,
-		publisher: publisher,
-		ctx:       ctx,
-		cancel:    cancel,
+	return &StandaloneExporter{
+		publisher:   publisher,
+		topic:       topic,
+		serviceName: serviceName,
 	}
 }
 
-// SetPublisher sets the MetricsPublisher reference for publishing metrics
-// This allows creating the provider before the publisher to avoid circular dependencies
-func (s *StandaloneMetricsProvider) SetPublisher(publisher MetricsPublisher) {
-	s.publisher = publisher
+// SetPublisher sets the MetricsPublisher reference for publishing metrics.
+// This allows creating the exporter before the publisher to avoid circular dependencies.
+func (e *StandaloneExporter) SetPublisher(publisher MetricsPublisher) {
+	e.publisher = publisher
 }
 
-// Start begins the periodic metrics publishing
-func (s *StandaloneMetricsProvider) Start() error {
-	if !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
-		return nil // Already started
+// Export converts OTel metric data into a MetricsSnapshot and publishes it.
+func (e *StandaloneExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+	if e.shutdown || e.publisher == nil {
+		return nil
 	}
 
-	s.wg.Add(1)
-	go s.publishLoop()
-
-	return nil
-}
-
-// Stop gracefully stops the metrics publishing
-func (s *StandaloneMetricsProvider) Stop() error {
-	if !atomic.CompareAndSwapInt32(&s.started, 1, 0) {
-		return nil // Already stopped
-	}
-
-	s.cancel()
-	s.wg.Wait()
-
-	return nil
-}
-
-// publishLoop runs the periodic metrics publishing
-func (s *StandaloneMetricsProvider) publishLoop() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(s.config.Interval)
-	defer ticker.Stop()
-
-	// Publish initial metrics immediately
-	s.publishMetrics()
-
-	for {
-		select {
-		case <-ticker.C:
-			s.publishMetrics()
-		case <-s.ctx.Done():
-			// Publish final metrics before stopping
-			s.publishMetrics()
-			return
-		}
-	}
-}
-
-// publishMetrics collects current metrics and publishes them
-func (s *StandaloneMetricsProvider) publishMetrics() {
 	snapshot := MetricsSnapshot{
 		Timestamp:   time.Now(),
-		ServiceName: s.config.ServiceName,
-		Counters:    make(map[string]int64),
-		Histograms:  make(map[string][]float64),
+		ServiceName: e.serviceName,
+		Counters:    make(map[string]float64),
+		Histograms:  make(map[string]HistogramSnapshot),
 		Gauges:      make(map[string]float64),
 	}
 
-	// Collect counters
-	s.counters.Range(func(key, value interface{}) bool {
-		name := key.(string)
-		counter := value.(*standaloneCounter)
-		snapshot.Counters[name] = atomic.LoadInt64(&counter.value)
-		return true
-	})
-
-	// Collect histograms
-	s.histograms.Range(func(key, value interface{}) bool {
-		name := key.(string)
-		histogram := value.(*standaloneHistogram)
-		histogram.mu.RLock()
-		snapshot.Histograms[name] = make([]float64, len(histogram.values))
-		copy(snapshot.Histograms[name], histogram.values)
-		histogram.mu.RUnlock()
-		return true
-	})
-
-	// Collect gauges
-	s.gauges.Range(func(key, value interface{}) bool {
-		name := key.(string)
-		gauge := value.(*standaloneGauge)
-		snapshot.Gauges[name] = gauge.getValue()
-		return true
-	})
-
-	// Publish to publisher with background context (if publisher is set)
-	if s.publisher != nil {
-		s.publisher.Publish(context.Background(), s.config.MetricsTopic, snapshot)
-	}
-}
-
-// MetricsProvider interface implementation
-
-func (s *StandaloneMetricsProvider) Counter(name string) Counter {
-	if existing, ok := s.counters.Load(name); ok {
-		return existing.(*standaloneCounter)
-	}
-
-	counter := &standaloneCounter{}
-	actual, _ := s.counters.LoadOrStore(name, counter)
-	return actual.(*standaloneCounter)
-}
-
-func (s *StandaloneMetricsProvider) Histogram(name string) Histogram {
-	if existing, ok := s.histograms.Load(name); ok {
-		return existing.(*standaloneHistogram)
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch data := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Counters[m.Name] += float64(dp.Value)
+				}
+			case metricdata.Sum[float64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Counters[m.Name] += dp.Value
+				}
+			case metricdata.Gauge[int64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Gauges[m.Name] = float64(dp.Value)
+				}
+			case metricdata.Gauge[float64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Gauges[m.Name] = dp.Value
+				}
+			case metricdata.Histogram[int64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Histograms[m.Name] = HistogramSnapshot{
+						Count:        dp.Count,
+						Sum:          float64(dp.Sum),
+						Bounds:       dp.Bounds,
+						BucketCounts: dp.BucketCounts,
+					}
+				}
+			case metricdata.Histogram[float64]:
+				for _, dp := range data.DataPoints {
+					snapshot.Histograms[m.Name] = HistogramSnapshot{
+						Count:        dp.Count,
+						Sum:          dp.Sum,
+						Bounds:       dp.Bounds,
+						BucketCounts: dp.BucketCounts,
+					}
+				}
+			}
+		}
 	}
 
-	histogram := &standaloneHistogram{}
-	actual, _ := s.histograms.LoadOrStore(name, histogram)
-	return actual.(*standaloneHistogram)
+	return e.publisher.Publish(ctx, e.topic, snapshot)
 }
 
-func (s *StandaloneMetricsProvider) Gauge(name string) Gauge {
-	if existing, ok := s.gauges.Load(name); ok {
-		return existing.(*standaloneGauge)
+// Temporality returns cumulative temporality for all instrument kinds.
+func (e *StandaloneExporter) Temporality(_ sdkmetric.InstrumentKind) metricdata.Temporality {
+	return metricdata.CumulativeTemporality
+}
+
+// Aggregation returns the default aggregation for all instrument kinds.
+func (e *StandaloneExporter) Aggregation(_ sdkmetric.InstrumentKind) sdkmetric.Aggregation {
+	return sdkmetric.AggregationDefault{}
+}
+
+// ForceFlush is a no-op; flushing is handled by the PeriodicReader.
+func (e *StandaloneExporter) ForceFlush(_ context.Context) error {
+	return nil
+}
+
+// Shutdown marks the exporter as shut down.
+func (e *StandaloneExporter) Shutdown(_ context.Context) error {
+	e.shutdown = true
+	return nil
+}
+
+// NewStandaloneMeterProvider creates an sdkmetric.MeterProvider that
+// periodically exports metrics to a bus topic via MetricsPublisher.
+func NewStandaloneMeterProvider(publisher MetricsPublisher, config *StandaloneMetricsConfig) (*sdkmetric.MeterProvider, *StandaloneExporter) {
+	if config == nil {
+		config = &StandaloneMetricsConfig{}
+	}
+	interval := config.Interval
+	if interval == 0 {
+		interval = 30 * time.Second
 	}
 
-	gauge := &standaloneGauge{}
-	actual, _ := s.gauges.LoadOrStore(name, gauge)
-	return actual.(*standaloneGauge)
-}
+	exporter := NewStandaloneExporter(publisher, config)
+	reader := sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(interval))
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 
-// Metric implementations
-
-type standaloneCounter struct {
-	value int64
-}
-
-func (c *standaloneCounter) Add(ctx context.Context, value int64, labels ...Label) {
-	atomic.AddInt64(&c.value, value)
-}
-
-type standaloneHistogram struct {
-	mu     sync.RWMutex
-	values []float64
-}
-
-func (h *standaloneHistogram) Record(ctx context.Context, value float64, labels ...Label) {
-	h.mu.Lock()
-	h.values = append(h.values, value)
-	h.mu.Unlock()
-}
-
-type standaloneGauge struct {
-	mu    sync.RWMutex
-	value float64
-}
-
-func (g *standaloneGauge) Set(ctx context.Context, value float64, labels ...Label) {
-	g.mu.Lock()
-	g.value = value
-	g.mu.Unlock()
-}
-
-func (g *standaloneGauge) getValue() float64 {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.value
+	return mp, exporter
 }

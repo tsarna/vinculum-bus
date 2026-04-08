@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/amir-yaghoubi/mqttpattern"
-	"github.com/tsarna/vinculum-bus/o11y"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -81,33 +81,60 @@ type basicEventBus struct {
 	logger        *zap.Logger
 	busName       string
 
-	// Observability (nil if not configured)
-	metricsProvider o11y.MetricsProvider
-	tracer          trace.Tracer
+	// Observability (nil instruments are safe to call via OTel noop)
+	tracer     trace.Tracer
+	hasMetrics bool // fast-path to skip attribute allocation
 
-	// Pre-created metrics (lazy loaded)
-	publishCounter     o11y.Counter
-	publishSyncCounter o11y.Counter
-	subscribeCounter   o11y.Counter
-	unsubscribeCounter o11y.Counter
-	errorCounter       o11y.Counter
-	latencyHistogram   o11y.Histogram
-	subscriberGauge    o11y.Gauge
+	// OTel metric instruments
+	publishCounter     metric.Int64Counter
+	publishSyncCounter metric.Int64Counter
+	subscribeCounter   metric.Int64Counter
+	unsubscribeCounter metric.Int64Counter
+	errorCounter       metric.Int64Counter
+	latencyHistogram   metric.Float64Histogram
+	subscriberGauge    metric.Float64Gauge
 }
 
-func (b *basicEventBus) setupObservability(config *o11y.ObservabilityConfig) {
-	b.metricsProvider = config.MetricsProvider
+// Common attribute keys for eventbus metrics
+var (
+	attrKeyOperation = attribute.Key("operation")
+	attrKeyTopic     = attribute.Key("messaging.destination.name")
+	attrKeyStatus    = attribute.Key("status")
+)
 
-	if b.metricsProvider != nil {
-		// Create metrics instruments
-		b.publishCounter = b.metricsProvider.Counter("eventbus_messages_published_total")
-		b.publishSyncCounter = b.metricsProvider.Counter("eventbus_messages_published_sync_total")
-		b.subscribeCounter = b.metricsProvider.Counter("eventbus_subscriptions_total")
-		b.unsubscribeCounter = b.metricsProvider.Counter("eventbus_unsubscriptions_total")
-		b.errorCounter = b.metricsProvider.Counter("eventbus_errors_total")
-		b.latencyHistogram = b.metricsProvider.Histogram("eventbus_publish_duration_seconds")
-		b.subscriberGauge = b.metricsProvider.Gauge("eventbus_active_subscribers")
-	}
+func (b *basicEventBus) setupMetrics(mp metric.MeterProvider) {
+	meter := mp.Meter("github.com/tsarna/vinculum-bus")
+
+	b.publishCounter, _ = meter.Int64Counter("messaging.client.sent.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Messages published asynchronously to the event bus"),
+	)
+	b.publishSyncCounter, _ = meter.Int64Counter("messaging.client.sent.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Messages published synchronously to the event bus"),
+	)
+	b.subscribeCounter, _ = meter.Int64Counter("eventbus.subscriptions",
+		metric.WithUnit("{subscription}"),
+		metric.WithDescription("Topic subscriptions created"),
+	)
+	b.unsubscribeCounter, _ = meter.Int64Counter("eventbus.unsubscriptions",
+		metric.WithUnit("{subscription}"),
+		metric.WithDescription("Topic unsubscriptions performed"),
+	)
+	b.errorCounter, _ = meter.Int64Counter("messaging.client.errors",
+		metric.WithUnit("{error}"),
+		metric.WithDescription("Errors encountered during event bus operations"),
+	)
+	b.latencyHistogram, _ = meter.Float64Histogram("messaging.client.operation.duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of synchronous publish operations"),
+	)
+	b.subscriberGauge, _ = meter.Float64Gauge("eventbus.active_subscribers",
+		metric.WithUnit("{subscriber}"),
+		metric.WithDescription("Current number of active subscribers"),
+	)
+
+	b.hasMetrics = true
 }
 
 // messagingAttrs returns the common OTel messaging semantic convention attributes
@@ -121,6 +148,18 @@ func (b *basicEventBus) messagingAttrs(topic string) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String("vinculum.bus.name", b.busName))
 	}
 	return attrs
+}
+
+// metricAttrs returns common metric attributes for a topic.
+func (b *basicEventBus) metricAttrs(topic string) metric.MeasurementOption {
+	attrs := []attribute.KeyValue{
+		semconv.MessagingSystemKey.String("eventbus"),
+		attrKeyTopic.String(topic),
+	}
+	if b.busName != "" {
+		attrs = append(attrs, attribute.String("vinculum.bus.name", b.busName))
+	}
+	return metric.WithAttributes(attrs...)
 }
 
 // Start begins the event bus's message processing goroutine
@@ -157,10 +196,10 @@ func (b *basicEventBus) Start() error {
 				case MessageTypeEventSync:
 					if err := b.doPublishSync(msg); err != nil {
 						b.logger.Error("Error in doPublishSync", zap.Error(err))
-						if b.errorCounter != nil {
+						if b.hasMetrics {
 							b.errorCounter.Add(msg.Ctx, 1,
-								o11y.Label{Key: "operation", Value: "publish_sync"},
-								o11y.Label{Key: "topic", Value: msg.Topic},
+								b.metricAttrs(msg.Topic),
+								metric.WithAttributes(attrKeyOperation.String("publish_sync")),
 							)
 						}
 					}
@@ -168,30 +207,30 @@ func (b *basicEventBus) Start() error {
 				case MessageTypeSubscribe, MessageTypeSubscribeWithExtraction:
 					if err := b.doSubscribe(msg); err != nil {
 						b.logger.Error("Error in doSubscribe", zap.Error(err))
-						if b.errorCounter != nil {
+						if b.hasMetrics {
 							b.errorCounter.Add(msg.Ctx, 1,
-								o11y.Label{Key: "operation", Value: "subscribe"},
-								o11y.Label{Key: "topic", Value: msg.Topic},
+								b.metricAttrs(msg.Topic),
+								metric.WithAttributes(attrKeyOperation.String("subscribe")),
 							)
 						}
 					}
 				case MessageTypeUnsubscribe:
 					if err := b.doUnsubscribe(msg); err != nil {
 						b.logger.Error("Error in doUnsubscribe", zap.Error(err))
-						if b.errorCounter != nil {
+						if b.hasMetrics {
 							b.errorCounter.Add(msg.Ctx, 1,
-								o11y.Label{Key: "operation", Value: "unsubscribe"},
-								o11y.Label{Key: "topic", Value: msg.Topic},
+								b.metricAttrs(msg.Topic),
+								metric.WithAttributes(attrKeyOperation.String("unsubscribe")),
 							)
 						}
 					}
 				case MessageTypeUnsubscribeAll:
 					if err := b.doUnsubscribeAll(msg); err != nil {
 						b.logger.Error("Error in doUnsubscribeAll", zap.Error(err))
-						if b.errorCounter != nil {
+						if b.hasMetrics {
 							b.errorCounter.Add(msg.Ctx, 1,
-								o11y.Label{Key: "operation", Value: "unsubscribe_all"},
-								o11y.Label{Key: "topic", Value: msg.Topic},
+								b.metricAttrs(msg.Topic),
+								metric.WithAttributes(attrKeyOperation.String("unsubscribe_all")),
 							)
 						}
 					}
@@ -232,10 +271,10 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 			b.logger.Error("Error in OnEvent", zap.Error(err))
 			deliverySpan.RecordError(err)
 			deliverySpan.SetStatus(codes.Error, err.Error())
-			if b.errorCounter != nil {
+			if b.hasMetrics {
 				b.errorCounter.Add(ctx, 1,
-					o11y.Label{Key: "operation", Value: "on_event"},
-					o11y.Label{Key: "topic", Value: topic},
+					b.metricAttrs(topic),
+					metric.WithAttributes(attrKeyOperation.String("on_event")),
 				)
 			}
 		}
@@ -244,10 +283,10 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 
 	if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
 		b.logger.Error("Error in OnEvent", zap.Error(err))
-		if b.errorCounter != nil {
+		if b.hasMetrics {
 			b.errorCounter.Add(ctx, 1,
-				o11y.Label{Key: "operation", Value: "on_event"},
-				o11y.Label{Key: "topic", Value: topic},
+				b.metricAttrs(topic),
+				metric.WithAttributes(attrKeyOperation.String("on_event")),
 			)
 		}
 	}
@@ -273,8 +312,11 @@ func (b *basicEventBus) Publish(ctx context.Context, topic string, payload any) 
 	}
 
 	// Record metrics if available
-	if b.publishCounter != nil {
-		b.publishCounter.Add(ctx, 1, o11y.Label{Key: "topic", Value: topic})
+	if b.hasMetrics {
+		b.publishCounter.Add(ctx, 1,
+			b.metricAttrs(topic),
+			metric.WithAttributes(attribute.String("messaging.operation.name", "send")),
+		)
 	}
 
 	b.accept(EventBusMessage{
@@ -319,18 +361,11 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 	err := <-responseCh
 
 	// Record metrics
-	if b.publishSyncCounter != nil {
-		status := "success"
-		if err != nil {
-			status = "error"
-		}
-		b.publishSyncCounter.Add(ctx, 1,
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "status", Value: status},
-		)
-	}
-	if b.latencyHistogram != nil {
-		b.latencyHistogram.Record(ctx, time.Since(start).Seconds(), o11y.Label{Key: "topic", Value: topic})
+	if b.hasMetrics {
+		attrs := b.metricAttrs(topic)
+		statusAttr := metric.WithAttributes(attribute.String("messaging.operation.name", "send_sync"))
+		b.publishSyncCounter.Add(ctx, 1, attrs, statusAttr)
+		b.latencyHistogram.Record(ctx, time.Since(start).Seconds(), attrs)
 	}
 
 	if span != nil {
@@ -368,15 +403,8 @@ func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber 
 
 	err := <-responseCh
 
-	if b.subscribeCounter != nil {
-		status := "success"
-		if err != nil {
-			status = "error"
-		}
-		b.subscribeCounter.Add(ctx, 1,
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "status", Value: status},
-		)
+	if b.hasMetrics {
+		b.subscribeCounter.Add(ctx, 1, b.metricAttrs(topic))
 	}
 
 	return err
@@ -411,15 +439,8 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscribe
 
 	err := <-responseCh
 
-	if b.unsubscribeCounter != nil {
-		status := "success"
-		if err != nil {
-			status = "error"
-		}
-		b.unsubscribeCounter.Add(ctx, 1,
-			o11y.Label{Key: "topic", Value: topic},
-			o11y.Label{Key: "status", Value: status},
-		)
+	if b.hasMetrics {
+		b.unsubscribeCounter.Add(ctx, 1, b.metricAttrs(topic))
 	}
 
 	return err
@@ -443,16 +464,8 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 
 	err := <-responseCh
 
-	if b.unsubscribeCounter != nil {
-		status := "success"
-		if err != nil {
-			status = "error"
-		}
-		// For UnsubscribeAll, we increment by 1 operation (not the count of subscriptions)
-		b.unsubscribeCounter.Add(ctx, 1,
-			o11y.Label{Key: "topic", Value: "*"},
-			o11y.Label{Key: "status", Value: status},
-		)
+	if b.hasMetrics {
+		b.unsubscribeCounter.Add(ctx, 1, b.metricAttrs("*"))
 	}
 
 	return err
@@ -476,9 +489,9 @@ func (b *basicEventBus) doSubscribe(msg EventBusMessage) error {
 	currentSubscriptions[msg.Topic] = makeMatcher(msg)
 
 	// Update subscriber gauge
-	if b.subscriberGauge != nil {
+	if b.hasMetrics {
 		subscriberCount := float64(len(b.subscriptions))
-		b.subscriberGauge.Set(ctx, subscriberCount)
+		b.subscriberGauge.Record(ctx, subscriberCount)
 	}
 
 	err := subscriber.OnSubscribe(ctx, msg.Topic)
@@ -506,9 +519,9 @@ func (b *basicEventBus) doUnsubscribe(msg EventBusMessage) error {
 	}
 
 	// Update subscriber gauge
-	if b.subscriberGauge != nil {
+	if b.hasMetrics {
 		subscriberCount := float64(len(b.subscriptions))
-		b.subscriberGauge.Set(ctx, subscriberCount)
+		b.subscriberGauge.Record(ctx, subscriberCount)
 	}
 
 	err := subscriber.OnUnsubscribe(ctx, msg.Topic)
@@ -526,9 +539,9 @@ func (b *basicEventBus) doUnsubscribeAll(msg EventBusMessage) error {
 	delete(b.subscriptions, subscriber)
 
 	// Update subscriber gauge
-	if b.subscriberGauge != nil {
+	if b.hasMetrics {
 		subscriberCount := float64(len(b.subscriptions))
-		b.subscriberGauge.Set(ctx, subscriberCount)
+		b.subscriberGauge.Record(ctx, subscriberCount)
 	}
 
 	err := subscriber.OnUnsubscribe(ctx, "")

@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsarna/vinculum-bus/o11y"
+	"go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap/zaptest"
@@ -102,24 +105,12 @@ func (m *MockSubscriber) Reset() {
 	m.events = m.events[:0]
 }
 
-// Mock implementations for testing observability
-type mockMetricsProvider struct{}
-
-func (m *mockMetricsProvider) Counter(name string) o11y.Counter     { return &mockCounter{} }
-func (m *mockMetricsProvider) Histogram(name string) o11y.Histogram { return &mockHistogram{} }
-func (m *mockMetricsProvider) Gauge(name string) o11y.Gauge         { return &mockGauge{} }
-
-type mockCounter struct{}
-
-func (m *mockCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {}
-
-type mockHistogram struct{}
-
-func (m *mockHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {}
-
-type mockGauge struct{}
-
-func (m *mockGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {}
+// newTestMeterProvider creates an sdkmetric.MeterProvider with a ManualReader for testing.
+func newTestMeterProvider() (*sdkmetric.MeterProvider, *sdkmetric.ManualReader) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	return mp, reader
+}
 
 
 func TestNewEventBus(t *testing.T) {
@@ -189,13 +180,13 @@ func TestEventBusBuilder_WithBufferSize(t *testing.T) {
 	}
 }
 
-func TestEventBusBuilder_WithMetrics(t *testing.T) {
+func TestEventBusBuilder_WithMeterProvider(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	mockMetrics := &mockMetricsProvider{}
+	mp := noop.NewMeterProvider()
 
 	eventBus, err := NewEventBus().
 		WithLogger(logger).
-		WithMetrics(mockMetrics).
+		WithMeterProvider(mp).
 		WithServiceInfo("test-service", "1.0.0").
 		Build()
 
@@ -204,8 +195,8 @@ func TestEventBusBuilder_WithMetrics(t *testing.T) {
 	}
 
 	b := eventBus.(*basicEventBus)
-	if b.metricsProvider != mockMetrics {
-		t.Error("Expected metrics provider to be set")
+	if !b.hasMetrics {
+		t.Error("Expected hasMetrics to be true")
 	}
 }
 
@@ -266,10 +257,10 @@ func TestEventBusBuilder_FluentInterface(t *testing.T) {
 		t.Error("WithBufferSize should return the same builder instance")
 	}
 
-	mockMetrics := &mockMetricsProvider{}
-	result3 := builder.WithMetrics(mockMetrics)
+	mp := noop.NewMeterProvider()
+	result3 := builder.WithMeterProvider(mp)
 	if result3 != builder {
-		t.Error("WithMetrics should return the same builder instance")
+		t.Error("WithMeterProvider should return the same builder instance")
 	}
 
 	tp := sdktrace.NewTracerProvider()
@@ -1233,16 +1224,12 @@ func TestEventBusPublishSyncBeforeStart(t *testing.T) {
 }
 
 func TestEventBusWithObservability(t *testing.T) {
-	// Create a simple test metrics provider
-	metrics := &testMetricsProvider{
-		counters:   make(map[string]*testCounter),
-		histograms: make(map[string]*testHistogram),
-		gauges:     make(map[string]*testGauge),
-	}
+	mp, reader := newTestMeterProvider()
+	defer mp.Shutdown(context.Background()) //nolint:errcheck
 
 	eventBus, err := NewEventBus().
 		WithLogger(zaptest.NewLogger(t)).
-		WithMetrics(metrics).
+		WithMeterProvider(mp).
 		WithServiceInfo("test-service", "v1.0.0").
 		Build()
 	if err != nil {
@@ -1265,76 +1252,38 @@ func TestEventBusWithObservability(t *testing.T) {
 	eventBus.Publish(context.Background(), "test/metrics", "test message")
 	eventBus.PublishSync(context.Background(), "test/metrics", "sync test message")
 
-	// Verify metrics were recorded
-	if publishCounter := metrics.counters["eventbus_messages_published_total"]; publishCounter == nil {
-		t.Error("Expected publish counter to be created")
-	} else if publishCounter.value != 1 {
-		t.Errorf("Expected publish counter value to be 1, got %d", publishCounter.value)
+	// Allow async processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Collect metrics
+	var rm metricdata.ResourceMetrics
+	err = reader.Collect(context.Background(), &rm)
+	if err != nil {
+		t.Fatalf("Failed to collect metrics: %v", err)
 	}
 
-	if syncCounter := metrics.counters["eventbus_messages_published_sync_total"]; syncCounter == nil {
-		t.Error("Expected sync publish counter to be created")
-	} else if syncCounter.value != 1 {
-		t.Errorf("Expected sync publish counter value to be 1, got %d", syncCounter.value)
+	// Build a map of metric name -> metric for easy lookup
+	metrics := make(map[string]metricdata.Metrics)
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			metrics[m.Name] = m
+		}
 	}
 
-	if subscriberGauge := metrics.gauges["eventbus_active_subscribers"]; subscriberGauge == nil {
-		t.Error("Expected subscriber gauge to be created")
-	} else if subscriberGauge.value != 1.0 {
-		t.Errorf("Expected subscriber gauge value to be 1.0, got %f", subscriberGauge.value)
+	// Verify publish counter exists
+	if _, ok := metrics["messaging.client.sent.messages"]; !ok {
+		t.Error("Expected messaging.client.sent.messages metric to be created")
 	}
-}
 
-// Test implementations for observability
-type testMetricsProvider struct {
-	counters   map[string]*testCounter
-	histograms map[string]*testHistogram
-	gauges     map[string]*testGauge
-}
-
-func (p *testMetricsProvider) Counter(name string) o11y.Counter {
-	if p.counters[name] == nil {
-		p.counters[name] = &testCounter{}
+	// Verify operation duration histogram exists
+	if _, ok := metrics["messaging.client.operation.duration"]; !ok {
+		t.Error("Expected messaging.client.operation.duration metric to be created")
 	}
-	return p.counters[name]
-}
 
-func (p *testMetricsProvider) Histogram(name string) o11y.Histogram {
-	if p.histograms[name] == nil {
-		p.histograms[name] = &testHistogram{}
+	// Verify subscriber gauge exists
+	if _, ok := metrics["eventbus.active_subscribers"]; !ok {
+		t.Error("Expected eventbus.active_subscribers metric to be created")
 	}
-	return p.histograms[name]
-}
-
-func (p *testMetricsProvider) Gauge(name string) o11y.Gauge {
-	if p.gauges[name] == nil {
-		p.gauges[name] = &testGauge{}
-	}
-	return p.gauges[name]
-}
-
-type testCounter struct {
-	value int64
-}
-
-func (c *testCounter) Add(ctx context.Context, value int64, labels ...o11y.Label) {
-	c.value += value
-}
-
-type testHistogram struct {
-	values []float64
-}
-
-func (h *testHistogram) Record(ctx context.Context, value float64, labels ...o11y.Label) {
-	h.values = append(h.values, value)
-}
-
-type testGauge struct {
-	value float64
-}
-
-func (g *testGauge) Set(ctx context.Context, value float64, labels ...o11y.Label) {
-	g.value = value
 }
 
 // testMetricsSubscriber captures metrics snapshots for testing
@@ -1357,7 +1306,7 @@ func (s *testMetricsSubscriber) OnEvent(ctx context.Context, topic string, messa
 	return nil
 }
 
-func TestStandaloneMetricsProvider(t *testing.T) {
+func TestStandaloneMeterProvider(t *testing.T) {
 	eventBus, err := NewEventBus().WithLogger(zaptest.NewLogger(t)).Build()
 	if err != nil {
 		t.Fatalf("Build() returned error: %v", err)
@@ -1368,23 +1317,18 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	}
 	defer eventBus.Stop()
 
-	// Create standalone metrics provider with fast interval for testing
-	metricsProvider := o11y.NewStandaloneMetricsProvider(eventBus, &o11y.StandaloneMetricsConfig{
+	// Create standalone meter provider with fast interval for testing
+	mp, _ := o11y.NewStandaloneMeterProvider(eventBus, &o11y.StandaloneMetricsConfig{
 		Interval:     50 * time.Millisecond, // Fast for testing
 		MetricsTopic: "$metrics",
 		ServiceName:  "test-service",
 	})
-
-	err = metricsProvider.Start()
-	if err != nil {
-		t.Fatalf("Failed to start metrics provider: %v", err)
-	}
-	defer metricsProvider.Stop()
+	defer mp.Shutdown(context.Background()) //nolint:errcheck
 
 	// Create observable EventBus using the standalone provider
 	observableEventBus, err := NewEventBus().
 		WithLogger(zaptest.NewLogger(t)).
-		WithMetrics(metricsProvider).
+		WithMeterProvider(mp).
 		WithServiceInfo("test-service", "v1.0.0").
 		Build()
 	if err != nil {
@@ -1421,7 +1365,7 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Wait for metrics to be published (at least one cycle)
-	deadline := time.Now().Add(200 * time.Millisecond) // Wait for at least 4 cycles
+	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		metricsMutex.Lock()
 		received := metricsReceived
@@ -1457,17 +1401,17 @@ func TestStandaloneMetricsProvider(t *testing.T) {
 		t.Error("Expected gauges to be present")
 	}
 
-	// Check for specific metrics
-	if publishCount, exists := receivedMetrics.Counters["eventbus_messages_published_total"]; !exists || publishCount < 1 {
-		t.Errorf("Expected published messages counter >= 1, got %d", publishCount)
+	// Check for specific metrics (now using OTel semconv names)
+	if publishCount, exists := receivedMetrics.Counters["messaging.client.sent.messages"]; !exists || publishCount < 1 {
+		t.Errorf("Expected messaging.client.sent.messages counter >= 1, got %f", publishCount)
 	}
 
-	if syncCount, exists := receivedMetrics.Counters["eventbus_messages_published_sync_total"]; !exists || syncCount < 1 {
-		t.Errorf("Expected sync published messages counter >= 1, got %d", syncCount)
+	if _, exists := receivedMetrics.Histograms["messaging.client.operation.duration"]; !exists {
+		t.Error("Expected messaging.client.operation.duration histogram to be present")
 	}
 
-	if subscriberCount, exists := receivedMetrics.Gauges["eventbus_active_subscribers"]; !exists || subscriberCount < 1 {
-		t.Errorf("Expected active subscribers gauge >= 1, got %f", subscriberCount)
+	if subscriberCount, exists := receivedMetrics.Gauges["eventbus.active_subscribers"]; !exists || subscriberCount < 1 {
+		t.Errorf("Expected eventbus.active_subscribers gauge >= 1, got %f", subscriberCount)
 	}
 }
 
