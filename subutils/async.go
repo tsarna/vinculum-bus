@@ -92,16 +92,22 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 	return a
 }
 
-// processMessage handles a single message by dispatching it to the appropriate wrapped subscriber method
+// processMessage handles a single message by dispatching it to the appropriate
+// wrapped subscriber method. The original context is detached from cancellation
+// via context.WithoutCancel because the producer may have already returned and
+// canceled its context by the time async processing occurs. Context values
+// (including trace spans) are preserved.
 func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
+	ctx := context.WithoutCancel(msg.Ctx)
 	switch msg.MsgType {
 	case bus.MessageTypeSubscribe:
-		a.wrapped.OnSubscribe(msg.Ctx, msg.Topic)
+		a.wrapped.OnSubscribe(ctx, msg.Topic)
 	case bus.MessageTypeUnsubscribe:
-		a.wrapped.OnUnsubscribe(msg.Ctx, msg.Topic)
+		a.wrapped.OnUnsubscribe(ctx, msg.Topic)
 	case bus.MessageTypeEvent:
-		a.wrapped.OnEvent(msg.Ctx, msg.Topic, msg.Payload, msg.Fields)
+		a.wrapped.OnEvent(ctx, msg.Topic, msg.Payload, msg.Fields)
 	default:
+		msg.Ctx = ctx
 		a.wrapped.PassThrough(msg.EventBusMessage)
 	}
 }

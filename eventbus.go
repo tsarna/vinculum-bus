@@ -264,7 +264,7 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 			spanOpts = append(spanOpts, trace.WithLinks(trace.Link{SpanContext: publishSpanCtx}))
 		}
 		var deliverySpan trace.Span
-		ctx, deliverySpan = b.tracer.Start(context.Background(), "process "+topic, spanOpts...)
+		ctx, deliverySpan = b.tracer.Start(context.WithoutCancel(ctx), "process "+topic, spanOpts...)
 		defer deliverySpan.End()
 
 		if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
@@ -280,6 +280,13 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 		}
 		return
 	}
+
+	// Detach from the producer's context cancellation for async delivery —
+	// the producer may have already returned (e.g. an HTTP handler whose
+	// request context is canceled after the response is sent). WithoutCancel
+	// preserves context values (including trace spans) while preventing
+	// cancellation propagation.
+	ctx = context.WithoutCancel(ctx)
 
 	if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
 		b.logger.Error("Error in OnEvent", zap.Error(err))
