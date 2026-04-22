@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-04-22
+
+### Fixed
+
+- **Async delivery context cancellation** — `deliverAsync` and `AsyncQueueingSubscriber.processMessage` now use `context.WithoutCancel` to detach from the producer's context. Previously, a canceled producer context (e.g. a completed HTTP request) would cause downstream `OnEvent` calls to fail with "context canceled". Context values including OTel baggage are preserved. The tracer path in `deliverAsync` also switched from `context.Background()` to `context.WithoutCancel` to preserve baggage propagation across async boundaries.
+
 ## [0.11.0] - 2026-04-08
 
 ### Changed
