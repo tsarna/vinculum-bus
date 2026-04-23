@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amir-yaghoubi/mqttpattern"
 	"github.com/tsarna/vinculum-bus"
+	"github.com/tsarna/vinculum-bus/topicmatch"
 )
 
 // MessageTransformFunc is a function that transforms EventBus messages.
@@ -43,7 +43,7 @@ type MessageTransformFunc func(msg *bus.EventBusMessage) (*bus.EventBusMessage, 
 //	}
 func DropTopicPattern(pattern string) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
-		if mqttpattern.Matches(pattern, msg.Topic) {
+		if topicmatch.Matches(pattern, msg.Topic) {
 			return nil, false // Drop message, continue pipeline (though it will stop due to nil)
 		}
 		return msg, true // Keep message, continue pipeline
@@ -221,12 +221,12 @@ type SimpleMessageTransformFunc func(ctx context.Context, payload any, fields ma
 func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
 		// Check if topic matches pattern
-		if !mqttpattern.Matches(pattern, msg.Topic) {
+		if !topicmatch.Matches(pattern, msg.Topic) {
 			return msg, true // Topic doesn't match, pass through unchanged
 		}
 
 		// Extract fields from the topic using the pattern
-		extractedFields := mqttpattern.Extract(pattern, msg.Topic)
+		extractedFields := topicmatch.Extract(pattern, msg.Topic)
 
 		// Apply the simple transform function with extracted fields
 		transformedPayload := transform(msg.Ctx, msg.Payload, extractedFields)
@@ -260,7 +260,7 @@ func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) Me
 //	}
 func IfPattern(pattern string, transform MessageTransformFunc) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
-		if mqttpattern.Matches(pattern, msg.Topic) {
+		if topicmatch.Matches(pattern, msg.Topic) {
 			return transform(msg)
 		}
 		return msg, true // Pass through unchanged if pattern doesn't match
@@ -299,7 +299,7 @@ func IfPrefix(prefix string, transform MessageTransformFunc) MessageTransformFun
 //	}
 func IfElsePattern(pattern string, ifTransform, elseTransform MessageTransformFunc) MessageTransformFunc {
 	return func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
-		if mqttpattern.Matches(pattern, msg.Topic) {
+		if topicmatch.Matches(pattern, msg.Topic) {
 			return ifTransform(msg)
 		}
 		return elseTransform(msg)

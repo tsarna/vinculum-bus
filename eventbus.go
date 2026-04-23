@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/amir-yaghoubi/mqttpattern"
+	"github.com/tsarna/vinculum-bus/topicmatch"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -393,7 +393,7 @@ func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber 
 	}
 
 	msgType := MessageTypeSubscribe
-	if mqttpattern.HasExtractions(topic) {
+	if topicmatch.HasExtractions(topic) {
 		msgType = MessageTypeSubscribeWithExtraction
 	}
 

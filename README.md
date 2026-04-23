@@ -167,6 +167,19 @@ eventBus.Publish(ctx, "users/123/orders/456", orderData)
 // fields = {"userId": "123", "orderId": "456"}
 ```
 
+### Reserved `$`-prefixed topics
+
+Topics beginning with `$` are reserved for server/system use (e.g. `$metrics`
+for the standalone metrics provider). Following MQTT 5.0 §4.7.2, a topic
+filter starting with a wildcard character (`+` or `#`) will **not** match a
+topic beginning with `$`. To receive these topics, subscribe either exactly
+(`"$metrics"`) or with a pattern whose first segment is `$`-prefixed
+(`"$sys/#"`).
+
+Topic pattern matching across the bus and its bridges is consolidated in the
+`topicmatch` sub-package, which wraps `mqttpattern` and enforces this rule.
+Direct callers outside the bus should prefer `topicmatch` over `mqttpattern`.
+
 ## 📊 Observability
 
 ### OpenTelemetry Metrics
@@ -346,7 +359,7 @@ eventBus.Stop() // Waits for in-flight messages
 
 ### Core (Required)
 - `go.uber.org/zap` - Structured logging
-- `github.com/amir-yaghoubi/mqttpattern` - Topic pattern matching
+- `github.com/amir-yaghoubi/mqttpattern` - Topic pattern matching (wrapped by the `topicmatch` sub-package to enforce MQTT `$`-topic rules)
 
 ### Observability (Optional)
 - `github.com/tsarna/vinculum-bus/o11y` - Observability interfaces and standalone metrics

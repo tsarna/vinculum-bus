@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`topicmatch` package** — thin wrapper around `mqttpattern` that enforces the MQTT 5.0 §4.7.2 rule for `$`-prefixed topics. Exports `Matches`, `Extract`, `Exec`, and `HasExtractions`; the latter is a passthrough. All internal topic matching (subscriber delivery, `transform` pipeline, extraction detection) now routes through this package, making it the sole importer of `mqttpattern`.
+
+### Changed
+
+- **Wildcard subscriptions no longer match `$`-prefixed topics** — per MQTT 5.0 §4.7.2, a topic filter starting with `+` or `#` does not match topics beginning with `$`. Subscribers to `#` or `+/...` will no longer receive events published to reserved topics such as `$metrics`. Exact subscriptions (e.g. `"$metrics"`) and patterns whose first segment is `$`-prefixed (e.g. `"$sys/#"`) continue to match as before. Transform functions (`DropTopicPattern`, `IfPattern`, `IfElsePattern`, `TransformOnPattern`) follow the same rule.
+
 ## [0.11.1] - 2026-04-22
 
 ### Fixed

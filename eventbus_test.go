@@ -668,6 +668,73 @@ func TestEventBusMultilevelWildcardMatching(t *testing.T) {
 	}
 }
 
+// TestEventBusDollarTopicFiltering verifies MQTT 5.0 §4.7.2: topic filters
+// starting with a wildcard character (+ or #) must not match topics beginning
+// with $. The rule is enforced via the topicmatch wrapper.
+func TestEventBusDollarTopicFiltering(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	eventBus, err := NewEventBus().WithLogger(logger).Build()
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	err = eventBus.Start()
+	if err != nil {
+		t.Fatalf("Failed to start event bus: %v", err)
+	}
+	defer eventBus.Stop()
+
+	hashSub := NewMockSubscriber()
+	plusSub := NewMockSubscriber()
+	exactSub := NewMockSubscriber()
+	dollarPrefixSub := NewMockSubscriber()
+
+	eventBus.Subscribe(context.Background(), "#", hashSub)
+	eventBus.Subscribe(context.Background(), "+/foo", plusSub)
+	eventBus.Subscribe(context.Background(), "$metrics", exactSub)
+	eventBus.Subscribe(context.Background(), "$sys/#", dollarPrefixSub)
+
+	time.Sleep(10 * time.Millisecond)
+
+	eventBus.Publish(context.Background(), "regular/topic", "r1")
+	eventBus.Publish(context.Background(), "other/foo", "r2")
+	eventBus.Publish(context.Background(), "$metrics", "m1")
+	eventBus.Publish(context.Background(), "$sys/foo", "s1")
+
+	time.Sleep(10 * time.Millisecond)
+
+	// "#" must NOT match either $-topic.
+	hashEvents := hashSub.GetEvents()
+	if len(hashEvents) != 2 {
+		t.Fatalf("# subscriber: expected 2 events (regular/topic, other/foo), got %d", len(hashEvents))
+	}
+	for _, e := range hashEvents {
+		if len(e.Topic) > 0 && e.Topic[0] == '$' {
+			t.Errorf("# subscriber received $-topic %q, should have been filtered", e.Topic)
+		}
+	}
+
+	// "+/foo" must NOT match "$sys/foo" (+ at start).
+	plusEvents := plusSub.GetEvents()
+	if len(plusEvents) != 1 {
+		t.Fatalf("+/foo subscriber: expected 1 event (other/foo), got %d", len(plusEvents))
+	}
+	if plusEvents[0].Topic != "other/foo" {
+		t.Errorf("+/foo subscriber got %q, want other/foo", plusEvents[0].Topic)
+	}
+
+	// Exact "$metrics" subscription still works.
+	exactEvents := exactSub.GetEvents()
+	if len(exactEvents) != 1 || exactEvents[0].Topic != "$metrics" {
+		t.Errorf("$metrics subscriber: expected 1 event on $metrics, got %v", exactEvents)
+	}
+
+	// "$sys/#" (pattern starts with $, not with a wildcard) matches $sys/foo.
+	dollarEvents := dollarPrefixSub.GetEvents()
+	if len(dollarEvents) != 1 || dollarEvents[0].Topic != "$sys/foo" {
+		t.Errorf("$sys/# subscriber: expected 1 event on $sys/foo, got %v", dollarEvents)
+	}
+}
+
 func TestEventBusParameterExtraction(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	eventBus, err := NewEventBus().WithLogger(logger).Build()

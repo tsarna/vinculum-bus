@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/amir-yaghoubi/mqttpattern"
+	"github.com/tsarna/vinculum-bus/topicmatch"
 )
 
 // Note: Unless a subscriber is suubscribed to multiple busses and/or async queueing wrappers, it will
@@ -80,13 +80,13 @@ func makeMatcher(subscribeMsg EventBusMessage) matcher {
 			}
 		} else {
 			return func(topic string) (bool, map[string]string) {
-				return mqttpattern.Matches(pattern, topic), nil
+				return topicmatch.Matches(pattern, topic), nil
 			}
 		}
 	case MessageTypeSubscribeWithExtraction:
 		return func(topic string) (bool, map[string]string) {
-			if mqttpattern.Matches(topicPattern, topic) {
-				return true, mqttpattern.Extract(topicPattern, topic)
+			if topicmatch.Matches(topicPattern, topic) {
+				return true, topicmatch.Extract(topicPattern, topic)
 			}
 
 			return false, nil
