@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-04-23
+
 ### Added
+
+- **Tracing for `AsyncQueueingSubscriber`** — `subutils.AsyncQueueingSubscriber` now accepts a `trace.TracerProvider` via the new `WithTracerProvider` fluent option (and an optional `WithName` for instrumentation-scope and attribute naming). When configured, each message processed in the background goroutine is wrapped in a new-root `SpanKindConsumer` span (`process <topic>`, `on_subscribe <topic>`, `on_unsubscribe <topic>`, `tick`, `passthrough <topic>`) linked to the caller's span context. This preserves the causal link to the upstream publish span without tying the async span to the producer's already-ended lifecycle — the same pattern the event bus uses in `deliverAsync`. Ticker ticks now also flow through the shared dispatch path so they are traced uniformly.
+
+## [0.12.0] - 2026-04-23
 
 - **`topicmatch` package** — thin wrapper around `mqttpattern` that enforces the MQTT 5.0 §4.7.2 rule for `$`-prefixed topics. Exports `Matches`, `Extract`, `Exec`, and `HasExtractions`; the latter is a passthrough. All internal topic matching (subscriber delivery, `transform` pipeline, extraction detection) now routes through this package, making it the sole importer of `mqttpattern`.
 

@@ -2,6 +2,7 @@ package subutils
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsarna/vinculum-bus"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // asyncTestSubscriber is a subscriber for testing that tracks all operations
@@ -451,4 +455,164 @@ func TestAsyncQueueingSubscriber_TickerWithQueueFull(t *testing.T) {
 	// We can't easily verify this without exposing internal state,
 	// but the test shouldn't hang or panic
 	assert.True(t, true, "Test completed without hanging")
+}
+
+// ── Tracing tests ─────────────────────────────────────────────────────────────
+
+// erroringSubscriber returns an error from OnEvent to exercise the error-recording path.
+type erroringSubscriber struct {
+	bus.BaseSubscriber
+	err error
+}
+
+func (e *erroringSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	return e.err
+}
+
+// spanCapturingSubscriber records the span context seen inside OnEvent so
+// tests can assert the wrapped subscriber runs inside the new consumer span.
+type spanCapturingSubscriber struct {
+	bus.BaseSubscriber
+	mu      sync.Mutex
+	spanCtx trace.SpanContext
+}
+
+func (s *spanCapturingSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.spanCtx = trace.SpanFromContext(ctx).SpanContext()
+	return nil
+}
+
+func (s *spanCapturingSubscriber) getSpanContext() trace.SpanContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spanCtx
+}
+
+func setupAsyncTracer(t *testing.T) (*tracetest.InMemoryExporter, *sdktrace.TracerProvider) {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { tp.Shutdown(context.Background()) }) //nolint:errcheck
+	return exporter, tp
+}
+
+// startCallerSpan starts a short-lived producer span that ends before async
+// processing runs — simulating the upstream publish span on a real bus.
+func startCallerSpan(tp *sdktrace.TracerProvider, topic string) (context.Context, trace.SpanContext) {
+	tracer := tp.Tracer("test/caller")
+	ctx, span := tracer.Start(context.Background(), "publish "+topic,
+		trace.WithSpanKind(trace.SpanKindProducer))
+	spanCtx := span.SpanContext()
+	span.End()
+	return ctx, spanCtx
+}
+
+func TestAsyncQueueingSubscriber_TracingCreatesLinkedRootSpan(t *testing.T) {
+	exporter, tp := setupAsyncTracer(t)
+
+	captured := &spanCapturingSubscriber{}
+	asyncSub := NewAsyncQueueingSubscriber(captured, 10).
+		WithTracerProvider(tp).
+		Start()
+
+	callerCtx, callerSpanCtx := startCallerSpan(tp, "topic1")
+
+	require.NoError(t, asyncSub.OnEvent(callerCtx, "topic1", "payload", nil))
+
+	require.NoError(t, asyncSub.Close()) // drains before returning
+
+	spans := exporter.GetSpans()
+	var processSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "process topic1" {
+			processSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, processSpan, "expected a 'process topic1' consumer span")
+
+	assert.Equal(t, "consumer", processSpan.SpanKind.String())
+
+	// New root: different trace from the caller span.
+	assert.NotEqual(t, callerSpanCtx.TraceID(), processSpan.SpanContext.TraceID(),
+		"async process span should be a new root, not a child of the caller span")
+	assert.False(t, processSpan.Parent.IsValid(),
+		"async process span should have no parent (new root)")
+
+	// Linked back to the caller span.
+	require.Len(t, processSpan.Links, 1, "expected one link to the caller span")
+	assert.Equal(t, callerSpanCtx.TraceID(), processSpan.Links[0].SpanContext.TraceID())
+	assert.Equal(t, callerSpanCtx.SpanID(), processSpan.Links[0].SpanContext.SpanID())
+
+	// The wrapped subscriber ran inside the new consumer span.
+	seen := captured.getSpanContext()
+	assert.Equal(t, processSpan.SpanContext.TraceID(), seen.TraceID(),
+		"wrapped OnEvent should execute within the consumer span")
+	assert.Equal(t, processSpan.SpanContext.SpanID(), seen.SpanID())
+}
+
+func TestAsyncQueueingSubscriber_TracingRecordsError(t *testing.T) {
+	exporter, tp := setupAsyncTracer(t)
+
+	errSub := &erroringSubscriber{err: errors.New("boom")}
+	asyncSub := NewAsyncQueueingSubscriber(errSub, 10).
+		WithTracerProvider(tp).
+		Start()
+
+	require.NoError(t, asyncSub.OnEvent(context.Background(), "topic1", "payload", nil))
+	require.NoError(t, asyncSub.Close())
+
+	spans := exporter.GetSpans()
+	var processSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "process topic1" {
+			processSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, processSpan)
+
+	assert.Equal(t, "Error", processSpan.Status.Code.String())
+	require.NotEmpty(t, processSpan.Events, "expected an exception event on the span")
+}
+
+func TestAsyncQueueingSubscriber_TracingNoCallerSpan(t *testing.T) {
+	// When there is no valid caller span, the consumer span should still be
+	// created as a new root — just with no link.
+	exporter, tp := setupAsyncTracer(t)
+
+	asyncSub := NewAsyncQueueingSubscriber(&asyncTestSubscriber{}, 10).
+		WithTracerProvider(tp).
+		Start()
+
+	require.NoError(t, asyncSub.OnEvent(context.Background(), "topic1", "payload", nil))
+	require.NoError(t, asyncSub.Close())
+
+	spans := exporter.GetSpans()
+	var processSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "process topic1" {
+			processSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, processSpan)
+	assert.Empty(t, processSpan.Links, "no caller span means no link")
+	assert.False(t, processSpan.Parent.IsValid())
+}
+
+func TestAsyncQueueingSubscriber_TracingDisabledWhenNoProvider(t *testing.T) {
+	// Without a tracer provider, processing must not create any spans.
+	exporter, tp := setupAsyncTracer(t)
+
+	asyncSub := NewAsyncQueueingSubscriber(&asyncTestSubscriber{}, 10).Start()
+
+	// Use a caller span from the exporter's tracer so we'd notice if processing leaked spans into it.
+	callerCtx, _ := startCallerSpan(tp, "topic1")
+	require.NoError(t, asyncSub.OnEvent(callerCtx, "topic1", "payload", nil))
+	require.NoError(t, asyncSub.Close())
+
+	for _, span := range exporter.GetSpans() {
+		assert.NotEqual(t, "process topic1", span.Name,
+			"no process span should be created when WithTracerProvider is not configured")
+	}
 }

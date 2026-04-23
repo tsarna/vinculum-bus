@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"github.com/tsarna/vinculum-bus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Error definitions for AsyncQueueingSubscriber
@@ -30,6 +34,8 @@ type AsyncQueueingSubscriber struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	ticker    *time.Ticker // Optional ticker for periodic operations
+	tracer    trace.Tracer // Optional tracer for per-message consumer spans
+	name      string       // Optional name for span attributes
 }
 
 // NewAsyncQueueingSubscriber creates a new AsyncQueueingSubscriber that processes
@@ -83,6 +89,35 @@ func (a *AsyncQueueingSubscriber) WithTicker(interval time.Duration) *AsyncQueue
 	return a
 }
 
+// WithTracerProvider enables OTel tracing for message processing. When set,
+// each message processed in the background goroutine is wrapped in a new-root
+// SpanKindConsumer span linked to the caller's span context (if valid). The
+// new-root link pattern follows OTel messaging semantic conventions for async
+// pub/sub boundaries: the producer span has already ended by the time we
+// process the message, so a child span would be misleading.
+//
+// Returns the same AsyncQueueingSubscriber instance for method chaining. Must
+// be called before Start() to avoid racing with the processing goroutine.
+func (a *AsyncQueueingSubscriber) WithTracerProvider(tp trace.TracerProvider) *AsyncQueueingSubscriber {
+	if tp != nil {
+		scope := "github.com/tsarna/vinculum-bus/subutils"
+		if a.name != "" {
+			scope = scope + "/" + a.name
+		}
+		a.tracer = tp.Tracer(scope)
+	}
+	return a
+}
+
+// WithName sets a name used in the tracer instrumentation scope and as a
+// span attribute. Must be called before WithTracerProvider to affect the
+// tracer scope. Returns the same AsyncQueueingSubscriber instance for
+// method chaining.
+func (a *AsyncQueueingSubscriber) WithName(name string) *AsyncQueueingSubscriber {
+	a.name = name
+	return a
+}
+
 // Start begins processing messages in a background goroutine.
 // This method must be called after configuration (WithTicker, etc.) to start processing.
 // Returns the same AsyncQueueingSubscriber instance for method chaining.
@@ -97,18 +132,86 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 // via context.WithoutCancel because the producer may have already returned and
 // canceled its context by the time async processing occurs. Context values
 // (including trace spans) are preserved.
+//
+// When a tracer is configured (see WithTracerProvider), the dispatch is wrapped
+// in a new-root SpanKindConsumer span linked to the caller's span context. This
+// preserves the causal link to the upstream work without tying the async
+// processing span to the producer's lifecycle.
 func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
 	ctx := context.WithoutCancel(msg.Ctx)
+
+	var span trace.Span
+	if a.tracer != nil {
+		ctx, span = a.startConsumerSpan(ctx, msg)
+		defer span.End()
+	}
+
+	err := a.dispatch(ctx, msg)
+	if err != nil && span != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+}
+
+// dispatch routes a message to the appropriate wrapped subscriber method.
+func (a *AsyncQueueingSubscriber) dispatch(ctx context.Context, msg asyncMessage) error {
 	switch msg.MsgType {
 	case bus.MessageTypeSubscribe:
-		a.wrapped.OnSubscribe(ctx, msg.Topic)
+		return a.wrapped.OnSubscribe(ctx, msg.Topic)
 	case bus.MessageTypeUnsubscribe:
-		a.wrapped.OnUnsubscribe(ctx, msg.Topic)
+		return a.wrapped.OnUnsubscribe(ctx, msg.Topic)
 	case bus.MessageTypeEvent:
-		a.wrapped.OnEvent(ctx, msg.Topic, msg.Payload, msg.Fields)
+		return a.wrapped.OnEvent(ctx, msg.Topic, msg.Payload, msg.Fields)
 	default:
 		msg.Ctx = ctx
-		a.wrapped.PassThrough(msg.EventBusMessage)
+		return a.wrapped.PassThrough(msg.EventBusMessage)
+	}
+}
+
+// startConsumerSpan starts a new-root consumer span for processing a queued
+// message. The span is linked to the caller's span (if valid) so traces
+// remain causally connected across the async boundary.
+func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg asyncMessage) (context.Context, trace.Span) {
+	attrs := []attribute.KeyValue{
+		semconv.MessagingSystemKey.String("vinculum"),
+		semconv.MessagingOperationTypeDeliver,
+		semconv.MessagingOperationNameKey.String("process"),
+	}
+	if msg.Topic != "" {
+		attrs = append(attrs, semconv.MessagingDestinationNameKey.String(msg.Topic))
+	}
+	if a.name != "" {
+		attrs = append(attrs, attribute.String("vinculum.subscriber.name", a.name))
+	}
+
+	opts := []trace.SpanStartOption{
+		trace.WithNewRoot(),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(attrs...),
+	}
+	if linkCtx := trace.SpanFromContext(msg.Ctx).SpanContext(); linkCtx.IsValid() {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: linkCtx}))
+	}
+	return a.tracer.Start(ctx, spanNameFor(msg), opts...)
+}
+
+// spanNameFor returns the OTel span name for a queued message, following the
+// "<operation> <destination>" convention used by the event bus.
+func spanNameFor(msg asyncMessage) string {
+	switch msg.MsgType {
+	case bus.MessageTypeEvent:
+		return "process " + msg.Topic
+	case bus.MessageTypeSubscribe:
+		return "on_subscribe " + msg.Topic
+	case bus.MessageTypeUnsubscribe:
+		return "on_unsubscribe " + msg.Topic
+	case bus.MessageTypeTick:
+		return "tick"
+	default:
+		if msg.Topic != "" {
+			return "passthrough " + msg.Topic
+		}
+		return "passthrough"
 	}
 }
 
@@ -127,12 +230,10 @@ func (a *AsyncQueueingSubscriber) processQueue() {
 		case msg := <-a.queue:
 			a.processMessage(msg)
 		case <-tickerChan:
-			a.wrapped.PassThrough(bus.EventBusMessage{
-				Ctx:     context.Background(), // TODO can we use the connection's context here somehow?
+			a.processMessage(asyncMessage{EventBusMessage: bus.EventBusMessage{
+				Ctx:     context.Background(),
 				MsgType: bus.MessageTypeTick,
-				Topic:   "",
-				Payload: nil,
-			})
+			}})
 		case <-a.done:
 			// Shutdown signal received, drain remaining messages
 			a.drainQueue()
