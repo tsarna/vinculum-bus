@@ -237,3 +237,33 @@ func TestTransformingSubscriber_ChainedTransforms(t *testing.T) {
 	assert.True(t, transformedPayload["enriched"].(bool))
 	assert.Equal(t, "user data", transformedPayload["data"])
 }
+
+// TestTransformingSubscriber_TransformCanMutateFields verifies that a
+// MessageTransformFunc that writes to msg.Fields has those changes delivered
+// to the wrapped subscriber — the core behavior this refactor enables.
+func TestTransformingSubscriber_TransformCanMutateFields(t *testing.T) {
+	baseSubscriber := &testSubscriber{}
+
+	// Transform that injects a new field and overrides an existing one.
+	addFields := func(msg *bus.EventBusMessage) (*bus.EventBusMessage, bool) {
+		if msg.Fields == nil {
+			msg.Fields = map[string]string{}
+		}
+		msg.Fields["added"] = "by-transform"
+		msg.Fields["existing"] = "overridden"
+		return msg, true
+	}
+
+	transformingSubscriber := NewTransformingSubscriber(baseSubscriber, addFields)
+	ctx := context.Background()
+
+	err := transformingSubscriber.OnEvent(ctx, "topic", "payload",
+		map[string]string{"existing": "original", "kept": "asis"})
+	assert.NoError(t, err)
+
+	assert.Len(t, baseSubscriber.events, 1)
+	delivered := baseSubscriber.events[0].fields
+	assert.Equal(t, "by-transform", delivered["added"])
+	assert.Equal(t, "overridden", delivered["existing"])
+	assert.Equal(t, "asis", delivered["kept"])
+}

@@ -48,12 +48,21 @@ const (
 	MessageTypeTick
 )
 
-// EventBusMessage represents a message in the event bus with its context and metadata
+// EventBusMessage represents a message in the event bus with its context and metadata.
+//
+// Fields carries subscriber-local delivery metadata (e.g. topic pattern
+// extractions, enrichment added by transforms on the final hop). It is
+// intentionally stripped when a message is published to the bus: these fields
+// do not propagate across hops. The bus publish/subscribe paths construct
+// EventBusMessage values without populating Fields; Fields is set by the
+// delivery path (subscribers, transforms, or the caller of
+// transform.ApplyTransforms) to carry per-delivery context.
 type EventBusMessage struct {
 	Ctx     context.Context
 	MsgType MessageType
 	Topic   string
 	Payload any
+	Fields  map[string]string
 }
 
 // subscriptionRequest holds subscriber and response channel for subscribe/unsubscribe operations

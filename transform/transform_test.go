@@ -333,3 +333,56 @@ func TestRateLimitByTopic(t *testing.T) {
 		t.Error("Expected continue to be true")
 	}
 }
+
+// TestTransformsPreserveFields verifies that transforms which allocate a new
+// EventBusMessage carry Fields through unchanged. Subscriber-delivery fields
+// must survive every copy site in the transform chain.
+func TestTransformsPreserveFields(t *testing.T) {
+	ctx := context.Background()
+	origFields := map[string]string{"src": "sensor-a", "region": "us-west"}
+
+	newMsg := func(topic string) *bus.EventBusMessage {
+		return &bus.EventBusMessage{
+			Ctx:     ctx,
+			MsgType: bus.MessageTypeEvent,
+			Topic:   topic,
+			Payload: "payload",
+			Fields:  origFields,
+		}
+	}
+
+	cases := []struct {
+		name      string
+		transform MessageTransformFunc
+		topic     string
+	}{
+		{"AddTopicPrefix", AddTopicPrefix("out/"), "sensor/a"},
+		{"ReplaceInTopic", ReplaceInTopic("/", "."), "sensor/a"},
+		{"TransformOnPattern", TransformOnPattern("sensor/+device",
+			func(ctx context.Context, payload any, fields map[string]string) any {
+				return "rewritten"
+			}), "sensor/a"},
+		{"ModifyPayload", ModifyPayload(
+			func(ctx context.Context, payload any, fields map[string]string) any {
+				return "rewritten"
+			}), "sensor/a"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, cont := tc.transform(newMsg(tc.topic))
+			if !cont {
+				t.Fatalf("transform stopped the pipeline unexpectedly")
+			}
+			if out == nil {
+				t.Fatalf("transform dropped the message unexpectedly")
+			}
+			if out.Fields == nil {
+				t.Fatalf("Fields was not preserved (nil on output)")
+			}
+			if out.Fields["src"] != "sensor-a" || out.Fields["region"] != "us-west" {
+				t.Errorf("Fields corrupted: got %v", out.Fields)
+			}
+		})
+	}
+}

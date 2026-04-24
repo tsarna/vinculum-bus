@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`EventBusMessage.Fields`** — new `Fields map[string]string` on `EventBusMessage` carries subscriber-local delivery metadata (e.g. topic pattern extractions, enrichment added by transforms on the final hop). The bus publish/subscribe paths leave `Fields` unset, preserving the existing semantic that fields do not propagate through busses. Transforms can now read and write `msg.Fields`, and a transform that mutates it will have its changes delivered to the wrapped subscriber's `OnEvent` (see the `TransformingSubscriber` change below).
+
+### Changed
+
+- **`transform.ApplyTransforms` signature (breaking)** — now takes an additional `fields map[string]string` parameter between `payload` and `transforms`, used to seed the initial message's `Fields`. Callers that were not populating fields should pass `nil`.
+- **`subutils.TransformingSubscriber.OnEvent` — transforms can now mutate `Fields`** — the wrapped subscriber is now delivered `transformed.Fields` rather than the original caller-supplied fields. A transform that adds, modifies, or removes entries in `msg.Fields` will have those changes visible on delivery. Transforms that do not touch `Fields` behave unchanged.
+- **Transform message-copy sites preserve `Fields`** — `AddTopicPrefix`, `ReplaceInTopic`, `TransformOnPattern`, and `ModifyPayload` now carry `Fields` through when they allocate a new `EventBusMessage`.
+
+### Removed
+
+- **`subutils.asyncMessage` wrapper** — `AsyncQueueingSubscriber` previously wrapped `EventBusMessage` in an unexported struct to carry fields alongside each queued message. Now that `EventBusMessage` carries `Fields` natively, the wrapper is gone and the internal queue is `chan bus.EventBusMessage`. No effect on the public API.
+
 ## [0.13.0] - 2026-04-23
 
 ### Added

@@ -19,17 +19,12 @@ var (
 	ErrSubscriberClosed = errors.New("subscriber is closed")
 )
 
-type asyncMessage struct {
-	bus.EventBusMessage
-	Fields map[string]string
-}
-
 // AsyncQueueingSubscriber wraps another subscriber and processes events asynchronously
 // through a buffered channel queue. This allows the calling thread to return immediately
 // while events are processed in a background goroutine.
 type AsyncQueueingSubscriber struct {
 	wrapped   bus.Subscriber
-	queue     chan asyncMessage
+	queue     chan bus.EventBusMessage
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -60,7 +55,7 @@ func NewAsyncQueueingSubscriber(wrapped bus.Subscriber, queueSize int) *AsyncQue
 
 	subscriber := &AsyncQueueingSubscriber{
 		wrapped: wrapped,
-		queue:   make(chan asyncMessage, queueSize),
+		queue:   make(chan bus.EventBusMessage, queueSize),
 		done:    make(chan struct{}),
 	}
 
@@ -137,7 +132,7 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 // in a new-root SpanKindConsumer span linked to the caller's span context. This
 // preserves the causal link to the upstream work without tying the async
 // processing span to the producer's lifecycle.
-func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
+func (a *AsyncQueueingSubscriber) processMessage(msg bus.EventBusMessage) {
 	ctx := context.WithoutCancel(msg.Ctx)
 
 	var span trace.Span
@@ -154,7 +149,7 @@ func (a *AsyncQueueingSubscriber) processMessage(msg asyncMessage) {
 }
 
 // dispatch routes a message to the appropriate wrapped subscriber method.
-func (a *AsyncQueueingSubscriber) dispatch(ctx context.Context, msg asyncMessage) error {
+func (a *AsyncQueueingSubscriber) dispatch(ctx context.Context, msg bus.EventBusMessage) error {
 	switch msg.MsgType {
 	case bus.MessageTypeSubscribe:
 		return a.wrapped.OnSubscribe(ctx, msg.Topic)
@@ -164,14 +159,14 @@ func (a *AsyncQueueingSubscriber) dispatch(ctx context.Context, msg asyncMessage
 		return a.wrapped.OnEvent(ctx, msg.Topic, msg.Payload, msg.Fields)
 	default:
 		msg.Ctx = ctx
-		return a.wrapped.PassThrough(msg.EventBusMessage)
+		return a.wrapped.PassThrough(msg)
 	}
 }
 
 // startConsumerSpan starts a new-root consumer span for processing a queued
 // message. The span is linked to the caller's span (if valid) so traces
 // remain causally connected across the async boundary.
-func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg asyncMessage) (context.Context, trace.Span) {
+func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg bus.EventBusMessage) (context.Context, trace.Span) {
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("vinculum"),
 		semconv.MessagingOperationTypeDeliver,
@@ -197,7 +192,7 @@ func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg asy
 
 // spanNameFor returns the OTel span name for a queued message, following the
 // "<operation> <destination>" convention used by the event bus.
-func spanNameFor(msg asyncMessage) string {
+func spanNameFor(msg bus.EventBusMessage) string {
 	switch msg.MsgType {
 	case bus.MessageTypeEvent:
 		return "process " + msg.Topic
@@ -230,10 +225,10 @@ func (a *AsyncQueueingSubscriber) processQueue() {
 		case msg := <-a.queue:
 			a.processMessage(msg)
 		case <-tickerChan:
-			a.processMessage(asyncMessage{EventBusMessage: bus.EventBusMessage{
+			a.processMessage(bus.EventBusMessage{
 				Ctx:     context.Background(),
 				MsgType: bus.MessageTypeTick,
-			}})
+			})
 		case <-a.done:
 			// Shutdown signal received, drain remaining messages
 			a.drainQueue()
@@ -262,12 +257,10 @@ func (a *AsyncQueueingSubscriber) OnSubscribe(ctx context.Context, topic string)
 		return ErrSubscriberClosed
 	}
 
-	msg := asyncMessage{
-		EventBusMessage: bus.EventBusMessage{
-			Ctx:     ctx,
-			MsgType: bus.MessageTypeSubscribe,
-			Topic:   topic,
-		},
+	msg := bus.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: bus.MessageTypeSubscribe,
+		Topic:   topic,
 	}
 
 	select {
@@ -285,12 +278,10 @@ func (a *AsyncQueueingSubscriber) OnUnsubscribe(ctx context.Context, topic strin
 		return ErrSubscriberClosed
 	}
 
-	msg := asyncMessage{
-		EventBusMessage: bus.EventBusMessage{
-			Ctx:     ctx,
-			MsgType: bus.MessageTypeUnsubscribe,
-			Topic:   topic,
-		},
+	msg := bus.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: bus.MessageTypeUnsubscribe,
+		Topic:   topic,
 	}
 
 	select {
@@ -308,14 +299,12 @@ func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, mes
 		return ErrSubscriberClosed
 	}
 
-	msg := asyncMessage{
-		EventBusMessage: bus.EventBusMessage{
-			Ctx:     ctx,
-			MsgType: bus.MessageTypeEvent,
-			Topic:   topic,
-			Payload: message,
-		},
-		Fields: fields,
+	msg := bus.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: bus.MessageTypeEvent,
+		Topic:   topic,
+		Payload: message,
+		Fields:  fields,
 	}
 
 	select {
@@ -339,7 +328,7 @@ func (a *AsyncQueueingSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	}
 
 	select {
-	case a.queue <- asyncMessage{EventBusMessage: msg}:
+	case a.queue <- msg:
 		return nil
 	default:
 		return ErrQueueFull

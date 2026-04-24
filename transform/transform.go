@@ -83,6 +83,7 @@ func AddTopicPrefix(prefix string) MessageTransformFunc {
 			MsgType: msg.MsgType,
 			Topic:   prefix + msg.Topic,
 			Payload: msg.Payload,
+			Fields:  msg.Fields,
 		}
 		return modified, true
 	}
@@ -107,6 +108,7 @@ func ReplaceInTopic(old, new string) MessageTransformFunc {
 			MsgType: msg.MsgType,
 			Topic:   replaced,
 			Payload: msg.Payload,
+			Fields:  msg.Fields,
 		}
 		return modified, true
 	}
@@ -174,12 +176,17 @@ func TransformMessage(msg *bus.EventBusMessage, transforms []MessageTransformFun
 	return current, true
 }
 
-func ApplyTransforms(ctx context.Context, topic string, payload any, transforms []MessageTransformFunc) (*bus.EventBusMessage, bool) {
+// ApplyTransforms builds an EventBusMessage from (ctx, topic, payload, fields)
+// and runs it through the transform chain. The supplied fields seed the
+// message's Fields so transforms can read and/or mutate them, and so the
+// caller can read back any changes via the returned message's Fields.
+func ApplyTransforms(ctx context.Context, topic string, payload any, fields map[string]string, transforms []MessageTransformFunc) (*bus.EventBusMessage, bool) {
 	msg := &bus.EventBusMessage{
 		Ctx:     ctx,
 		MsgType: bus.MessageTypeEvent,
 		Topic:   topic,
 		Payload: payload,
+		Fields:  fields,
 	}
 
 	return TransformMessage(msg, transforms)
@@ -242,6 +249,7 @@ func TransformOnPattern(pattern string, transform SimpleMessageTransformFunc) Me
 			MsgType: msg.MsgType,
 			Topic:   msg.Topic,
 			Payload: transformedPayload,
+			Fields:  msg.Fields,
 		}
 
 		return transformed, true
@@ -359,6 +367,7 @@ func ModifyPayload(transform SimpleMessageTransformFunc) MessageTransformFunc {
 			MsgType: msg.MsgType,
 			Topic:   msg.Topic,
 			Payload: transformedPayload,
+			Fields:  msg.Fields,
 		}
 
 		return modified, true

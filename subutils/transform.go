@@ -54,17 +54,21 @@ func (t *TransformingSubscriber) OnUnsubscribe(ctx context.Context, topic string
 // OnEvent applies the transform pipeline to the event before passing it to the wrapped subscriber.
 // If any transform drops the message (returns nil) or stops processing (returns false),
 // the event will not be passed to the wrapped subscriber.
+//
+// The caller-supplied fields seed the message's Fields so transforms can read or
+// mutate them; the (possibly modified) Fields on the transformed message are
+// what's delivered to the wrapped subscriber.
 func (t *TransformingSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
 	// If no transforms are configured, pass through directly
 	if len(t.transforms) == 0 {
 		return t.wrapped.OnEvent(ctx, topic, message, fields)
 	}
 
-	transformed, _ := transform.ApplyTransforms(ctx, topic, message, t.transforms)
+	transformed, _ := transform.ApplyTransforms(ctx, topic, message, fields, t.transforms)
 
 	// If we have a transformed message, pass it to the wrapped subscriber
 	if transformed != nil {
-		return t.wrapped.OnEvent(ctx, transformed.Topic, transformed.Payload, fields)
+		return t.wrapped.OnEvent(ctx, transformed.Topic, transformed.Payload, transformed.Fields)
 	}
 
 	// Message was dropped, don't call wrapped subscriber
