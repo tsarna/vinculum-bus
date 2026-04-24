@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-24
+
 ### Added
 
 - **`EventBusMessage.Fields`** — new `Fields map[string]string` on `EventBusMessage` carries subscriber-local delivery metadata (e.g. topic pattern extractions, enrichment added by transforms on the final hop). The bus publish/subscribe paths leave `Fields` unset, preserving the existing semantic that fields do not propagate through busses. Transforms can now read and write `msg.Fields`, and a transform that mutates it will have its changes delivered to the wrapped subscriber's `OnEvent` (see the `TransformingSubscriber` change below).
