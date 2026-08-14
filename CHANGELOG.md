@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-14
+
+### Added
+
+- **`ReportedError`, for a subscriber that has already reported a failure
+  itself.** A subscriber sometimes knows more about a delivery failure than the
+  bus can: where in a configuration file the handler was written, say, and what
+  the failing line said. Such a subscriber logs the better report itself, and
+  the bus then logs the same failure again in the plain form the better one
+  replaced. Returning an error that implements `ReportedError` says the failure
+  has been reported and the bus's own log line would only repeat it:
+
+  ```go
+  type reported struct{ error }
+
+  func (reported) AlreadyReported() {}
+  func (e reported) Unwrap() error  { return e.error }
+
+  return reported{err}   // logged by the subscriber, not by the bus
+  ```
+
+  Only the log line is skipped. The error is still returned to the caller, still
+  recorded on the delivery span, and still counted, so a dead-letter path or an
+  ack decision reading the outcome sees exactly what it did before — and
+  delegating `Error` and `Unwrap`, as above, leaves the text and the wrapped type
+  intact for anything that inspects them.
+
+  The mark is a property of one error rather than of a subscriber, deliberately:
+  a subscriber typically reports the failures it can render and leaves the rest
+  to the bus, and marking per error is what keeps those two cases from silencing
+  each other. Nothing changes for a subscriber that does not return a marked
+  error.
+
 ## [0.15.1] - 2026-06-26
 
 ### Changed

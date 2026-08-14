@@ -204,7 +204,11 @@ func (b *basicEventBus) Start() error {
 
 				case MessageTypeEventSync:
 					if err := b.doPublishSync(msg); err != nil {
-						b.logger.Error("Error in doPublishSync", zap.Error(err))
+						// The error also goes back to the publisher, which is
+						// where a reported one has already been accounted for.
+						if !alreadyReported(err) {
+							b.logger.Error("Error in doPublishSync", zap.Error(err))
+						}
 						if b.hasMetrics {
 							b.errorCounter.Add(msg.Ctx, 1,
 								b.metricAttrs(msg.Topic),
@@ -277,7 +281,11 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 		defer deliverySpan.End()
 
 		if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
-			b.logger.Error("Error in OnEvent", zap.Error(err))
+			// Only the log line is skipped for an error the subscriber has
+			// already reported; the span and the counter see every failure.
+			if !alreadyReported(err) {
+				b.logger.Error("Error in OnEvent", zap.Error(err))
+			}
 			deliverySpan.RecordError(err)
 			deliverySpan.SetStatus(codes.Error, err.Error())
 			if b.hasMetrics {
@@ -298,7 +306,9 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 	ctx = context.WithoutCancel(ctx)
 
 	if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
-		b.logger.Error("Error in OnEvent", zap.Error(err))
+		if !alreadyReported(err) {
+			b.logger.Error("Error in OnEvent", zap.Error(err))
+		}
 		if b.hasMetrics {
 			b.errorCounter.Add(ctx, 1,
 				b.metricAttrs(topic),
@@ -581,7 +591,10 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 				if err != nil {
 					if publishError == nil {
 						publishError = err // store first error
-					} else {
+					} else if !alreadyReported(err) {
+						// The first error goes back to the caller; the rest are
+						// only logged, so a reported one has nowhere else to go
+						// and nothing more to add.
 						b.logger.Error("Error in OnEvent during sync publish", zap.Error(err))
 					}
 				}

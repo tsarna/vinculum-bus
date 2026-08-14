@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/tsarna/vinculum-bus/topicmatch"
@@ -36,6 +37,36 @@ func (b *BaseSubscriber) OnEvent(ctx context.Context, topic string, message any,
 
 func (b *BaseSubscriber) PassThrough(msg EventBusMessage) error {
 	return nil
+}
+
+// ReportedError is an error a subscriber returns to say it has already reported
+// the failure itself, in a form the bus cannot produce — a quoted source line,
+// say, from a subscriber that knows where the message was being handled.
+//
+// The bus skips only its own log line for such an error. It is still returned
+// to the caller, still recorded on the delivery span, and still counted, so
+// nothing that reads the outcome — a dead-letter path, an ack decision — sees
+// any difference. This is a property of one error rather than of a subscriber:
+// the same subscriber typically reports what it can render and leaves the rest
+// to the bus, and marking it per error is what keeps those two cases from
+// silencing each other.
+//
+// Wrap an error to mark it, delegating Error and Unwrap so the text and the
+// underlying type both survive:
+//
+//	type reported struct{ error }
+//
+//	func (reported) AlreadyReported()  {}
+//	func (e reported) Unwrap() error   { return e.error }
+type ReportedError interface {
+	error
+	AlreadyReported()
+}
+
+// alreadyReported reports whether err, or anything it wraps, is a ReportedError.
+func alreadyReported(err error) bool {
+	var reported ReportedError
+	return errors.As(err, &reported)
 }
 
 // EventReceiverWrapper is wrapper for converting a function to a Subscriber.
