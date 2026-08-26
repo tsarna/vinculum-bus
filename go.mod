@@ -8,11 +8,11 @@ require (
 	github.com/amir-yaghoubi/mqttpattern v0.0.0-20250829083210-f7d8d46a786e
 	github.com/stretchr/testify v1.12.1
 	github.com/tsarna/go-structdiff v0.2.1
-	go.opentelemetry.io/otel v1.45.0
-	go.opentelemetry.io/otel/metric v1.45.0
+	go.opentelemetry.io/otel v1.46.0
+	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/sdk/metric v1.45.0
-	go.opentelemetry.io/otel/trace v1.45.0
+	go.opentelemetry.io/otel/trace v1.46.0
 )
 
 require (
