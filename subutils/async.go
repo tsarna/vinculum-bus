@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tsarna/vinculum-bus"
@@ -31,6 +32,12 @@ type AsyncQueueingSubscriber struct {
 	ticker    *time.Ticker // Optional ticker for periodic operations
 	tracer    trace.Tracer // Optional tracer for per-message consumer spans
 	name      string       // Optional name for span attributes
+
+	// dropped counts messages refused because the queue was full. A subscription
+	// with a queue is a second, independent backpressure point: counting only
+	// the bus's drops would miss the one-slow-handler case, which is the common
+	// shape.
+	dropped uint64
 }
 
 // NewAsyncQueueingSubscriber creates a new AsyncQueueingSubscriber that processes
@@ -267,6 +274,7 @@ func (a *AsyncQueueingSubscriber) OnSubscribe(ctx context.Context, topic string)
 	case a.queue <- msg:
 		return nil
 	default:
+		a.recordDrop()
 		return ErrQueueFull
 	}
 }
@@ -288,6 +296,7 @@ func (a *AsyncQueueingSubscriber) OnUnsubscribe(ctx context.Context, topic strin
 	case a.queue <- msg:
 		return nil
 	default:
+		a.recordDrop()
 		return ErrQueueFull
 	}
 }
@@ -311,6 +320,7 @@ func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, mes
 	case a.queue <- msg:
 		return nil
 	default:
+		a.recordDrop()
 		return ErrQueueFull
 	}
 }
@@ -331,6 +341,7 @@ func (a *AsyncQueueingSubscriber) PassThrough(msg bus.EventBusMessage) error {
 	case a.queue <- msg:
 		return nil
 	default:
+		a.recordDrop()
 		return ErrQueueFull
 	}
 }
@@ -362,14 +373,30 @@ func (a *AsyncQueueingSubscriber) Close() error {
 	return nil
 }
 
-// QueueSize returns the current number of messages in the queue
-func (a *AsyncQueueingSubscriber) QueueSize() int {
+// QueueDepth returns the current number of messages in the queue.
+func (a *AsyncQueueingSubscriber) QueueDepth() int {
 	return len(a.queue)
 }
 
 // QueueCapacity returns the maximum capacity of the queue
 func (a *AsyncQueueingSubscriber) QueueCapacity() int {
 	return cap(a.queue)
+}
+
+// DroppedTotal returns the number of messages refused because the queue was
+// full.
+//
+// The overflow policy itself is unchanged and deliberately so: this queue's
+// remaining users are outbound senders and subscription actions, for whom
+// drop-newest under sustained overload is defensible. What was missing was the
+// number saying it had happened.
+func (a *AsyncQueueingSubscriber) DroppedTotal() uint64 {
+	return atomic.LoadUint64(&a.dropped)
+}
+
+// recordDrop accounts for a message the queue could not accept.
+func (a *AsyncQueueingSubscriber) recordDrop() {
+	atomic.AddUint64(&a.dropped, 1)
 }
 
 // IsClosed returns true if the subscriber has been closed

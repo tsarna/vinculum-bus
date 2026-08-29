@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,9 +29,16 @@ type mockClient struct {
 	connectShouldFail bool
 	connectFailCount  int
 	connectAttempts   int
+
+	// AutoReconnector reconnects from its own goroutine, so the flags it sets
+	// are read by the test while that goroutine is still writing them.
+	mu sync.Mutex
 }
 
 func (m *mockClient) Connect(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.connectCalled = true
 	m.connectAttempts++
 
@@ -41,12 +49,32 @@ func (m *mockClient) Connect(ctx context.Context) error {
 	return nil
 }
 
+// wasConnectCalled and wasSubscribeCalled read a flag the reconnect goroutine
+// may be writing.
+func (m *mockClient) wasConnectCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.connectCalled
+}
+
+func (m *mockClient) wasSubscribeCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.subscribeCalled
+}
+
 func (m *mockClient) Disconnect() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.disconnectCalled = true
 	return nil
 }
 
 func (m *mockClient) Subscribe(ctx context.Context, topicPattern string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.subscribeCalled = true
 	return nil
 }
@@ -345,7 +373,7 @@ func TestAutoReconnector(t *testing.T) {
 		// Should not attempt reconnection
 		time.Sleep(50 * time.Millisecond) // Give time for any potential reconnection
 		assert.Equal(t, 0, reconnector.GetReconnectCount())
-		assert.False(t, mockClient.connectCalled)
+		assert.False(t, mockClient.wasConnectCalled())
 	})
 
 	t.Run("no reconnection when disabled", func(t *testing.T) {
@@ -360,7 +388,7 @@ func TestAutoReconnector(t *testing.T) {
 		// Should not attempt reconnection because it's disabled
 		time.Sleep(50 * time.Millisecond)
 		assert.Equal(t, 0, reconnector.GetReconnectCount())
-		assert.False(t, mockClient.connectCalled)
+		assert.False(t, mockClient.wasConnectCalled())
 	})
 
 	t.Run("reconnection on error disconnect", func(t *testing.T) {
@@ -390,10 +418,10 @@ func TestAutoReconnector(t *testing.T) {
 
 		// Should have attempted reconnection
 		assert.Greater(t, reconnector.GetReconnectCount(), 0)
-		assert.True(t, mockClient.connectCalled)
+		assert.True(t, mockClient.wasConnectCalled())
 
 		// Should eventually succeed and resubscribe
-		assert.True(t, mockClient.subscribeCalled)
+		assert.True(t, mockClient.wasSubscribeCalled())
 	})
 
 	t.Run("max retries respected", func(t *testing.T) {

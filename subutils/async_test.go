@@ -97,7 +97,7 @@ func TestNewAsyncQueueingSubscriber(t *testing.T) {
 	assert.NotNil(t, asyncSub)
 	assert.Equal(t, baseSubscriber, asyncSub.wrapped)
 	assert.Equal(t, 10, asyncSub.QueueCapacity())
-	assert.Equal(t, 0, asyncSub.QueueSize())
+	assert.Equal(t, 0, asyncSub.QueueDepth())
 	assert.False(t, asyncSub.IsClosed())
 }
 
@@ -237,10 +237,22 @@ func TestAsyncQueueingSubscriber_QueueFull(t *testing.T) {
 	err = asyncSub.OnEvent(ctx, "topic3", "message3", nil)
 	assert.NoError(t, err)
 
+	assert.Equal(t, uint64(0), asyncSub.DroppedTotal(), "nothing has been refused yet")
+
 	// Fourth message should fail - queue is now full
 	err = asyncSub.OnEvent(ctx, "topic4", "message4", nil)
 	assert.Error(t, err)
 	assert.Equal(t, ErrQueueFull, err)
+
+	// A subscription with a queue is its own backpressure point, so the drop is
+	// counted here rather than only at the bus.
+	assert.Equal(t, uint64(1), asyncSub.DroppedTotal())
+
+	assert.Error(t, asyncSub.PassThrough(bus.EventBusMessage{
+		Ctx:     ctx,
+		MsgType: bus.MessageTypeTick,
+	}))
+	assert.Equal(t, uint64(2), asyncSub.DroppedTotal(), "every queueing path counts")
 }
 
 func TestAsyncQueueingSubscriber_CloseAndDrain(t *testing.T) {
@@ -325,7 +337,7 @@ func TestAsyncQueueingSubscriber_QueueSizeTracking(t *testing.T) {
 	ctx := context.Background()
 
 	// Initial queue should be empty
-	assert.Equal(t, 0, asyncSub.QueueSize())
+	assert.Equal(t, 0, asyncSub.QueueDepth())
 
 	// Add some messages quickly
 	for i := 0; i < 5; i++ {
@@ -334,14 +346,14 @@ func TestAsyncQueueingSubscriber_QueueSizeTracking(t *testing.T) {
 	}
 
 	// Queue size should increase (though it may start decreasing as processing begins)
-	queueSize := asyncSub.QueueSize()
+	queueSize := asyncSub.QueueDepth()
 	assert.True(t, queueSize > 0 && queueSize <= 5)
 
 	// Wait for processing to complete
 	time.Sleep(500 * time.Millisecond)
 
 	// Queue should be empty again
-	assert.Equal(t, 0, asyncSub.QueueSize())
+	assert.Equal(t, 0, asyncSub.QueueDepth())
 }
 
 func TestAsyncQueueingSubscriber_CloseMultipleTimes(t *testing.T) {

@@ -14,6 +14,7 @@ type EventBusBuilder struct {
 	logger         *zap.Logger
 	bufferSize     int
 	busName        string
+	undeliverable  bool
 	meterProvider  metric.MeterProvider
 	tracerProvider trace.TracerProvider
 	serviceName    string
@@ -42,6 +43,21 @@ func (b *EventBusBuilder) WithName(name string) *EventBusBuilder {
 // WithBufferSize sets the channel buffer size for the EventBus
 func (b *EventBusBuilder) WithBufferSize(size int) *EventBusBuilder {
 	b.bufferSize = size
+	return b
+}
+
+// WithUndeliverable controls whether a message that matched no subscriber is
+// republished under UndeliverableTopic, carrying its original context, payload,
+// and — reachable through UndeliverableTopicFromContext — the topic that failed
+// to route.
+//
+// Off by default. Publishing to a topic nobody wants is normal in pub/sub and
+// must stay free, and a bus that republished every unmatched message would
+// double its own load precisely when a configuration is already misrouting
+// traffic. The undelivered counter is always kept and is the diagnostic; this
+// is the remedy, for a bus where an unmatched message means something is wrong.
+func (b *EventBusBuilder) WithUndeliverable(undeliverable bool) *EventBusBuilder {
+	b.undeliverable = undeliverable
 	return b
 }
 
@@ -100,6 +116,7 @@ func (b *EventBusBuilder) Build() (EventBus, error) {
 		subscriptions: make(map[Subscriber]map[string]matcher),
 		logger:        logger,
 		busName:       busName,
+		undeliverable: b.undeliverable,
 	}
 
 	if b.meterProvider != nil {

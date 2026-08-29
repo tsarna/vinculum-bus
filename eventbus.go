@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,47 @@ type EventBus interface {
 
 	Publish(ctx context.Context, topic string, payload any) error
 	PublishSync(ctx context.Context, topic string, payload any) error
+
+	// QueueDepth returns the number of messages accepted but not yet dispatched.
+	QueueDepth() int
+
+	// QueueCapacity returns the buffer size the bus was built with.
+	QueueCapacity() int
+
+	// DroppedTotal returns the number of messages the bus could not accept
+	// because its queue was full.
+	DroppedTotal() uint64
+
+	// UndeliveredTotal returns the number of published messages that matched no
+	// subscriber.
+	UndeliveredTotal() uint64
+}
+
+// UndeliverableTopic is the reserved topic a bus built with
+// WithUndeliverable(true) republishes unmatched messages under. It is
+// $-prefixed, so it is never itself republished: a $undeliverable that nothing
+// consumes is counted and dropped rather than fed back into the bus.
+const UndeliverableTopic = "$undeliverable"
+
+// undeliverableTopicKey addresses the topic an undeliverable message was
+// originally published to, carried in the republished message's context.
+//
+// The context is the only place it can ride. Fields is overwritten by the
+// delivery loop with the matching subscriber's own topic extractions, and
+// wrapping the payload would change what the handler sees as the message.
+type undeliverableTopicKey struct{}
+
+// withUndeliverableTopic records the topic that failed to route.
+func withUndeliverableTopic(ctx context.Context, topic string) context.Context {
+	return context.WithValue(ctx, undeliverableTopicKey{}, topic)
+}
+
+// UndeliverableTopicFromContext returns the topic a message delivered on
+// UndeliverableTopic was originally published to, and whether this is such a
+// message.
+func UndeliverableTopicFromContext(ctx context.Context) (string, bool) {
+	topic, ok := ctx.Value(undeliverableTopicKey{}).(string)
+	return topic, ok
 }
 
 // MessageType represents the type of message in the event bus
@@ -90,6 +132,17 @@ type basicEventBus struct {
 	logger        *zap.Logger
 	busName       string
 
+	// undeliverable republishes unmatched messages under UndeliverableTopic.
+	// Off by default: publishing to nobody is legitimate in pub/sub, and every
+	// unmatched publish would otherwise become a second one on this same
+	// delivery goroutine.
+	undeliverable bool
+
+	// Readable without a metrics backend configured, which is what lets a
+	// configuration threshold on them. Atomic, so any goroutine may read them.
+	dropped     uint64
+	undelivered uint64
+
 	// Observability (nil instruments are safe to call via OTel noop)
 	tracer     trace.Tracer
 	hasMetrics bool // fast-path to skip attribute allocation
@@ -100,9 +153,25 @@ type basicEventBus struct {
 	subscribeCounter   metric.Int64Counter
 	unsubscribeCounter metric.Int64Counter
 	errorCounter       metric.Int64Counter
+	droppedCounter     metric.Int64Counter
+	undeliveredCounter metric.Int64Counter
 	latencyHistogram   metric.Float64Histogram
 	subscriberGauge    metric.Float64Gauge
 }
+
+// QueueDepth returns the number of messages accepted but not yet dispatched.
+func (b *basicEventBus) QueueDepth() int { return len(b.ch) }
+
+// QueueCapacity returns the buffer size the bus was built with.
+func (b *basicEventBus) QueueCapacity() int { return cap(b.ch) }
+
+// DroppedTotal returns the number of messages the bus could not accept because
+// its queue was full.
+func (b *basicEventBus) DroppedTotal() uint64 { return atomic.LoadUint64(&b.dropped) }
+
+// UndeliveredTotal returns the number of published messages that matched no
+// subscriber.
+func (b *basicEventBus) UndeliveredTotal() uint64 { return atomic.LoadUint64(&b.undelivered) }
 
 // Common attribute keys for eventbus metrics
 var (
@@ -133,6 +202,17 @@ func (b *basicEventBus) setupMetrics(mp metric.MeterProvider) {
 	b.errorCounter, _ = meter.Int64Counter("messaging.client.errors",
 		metric.WithUnit("{error}"),
 		metric.WithDescription("Errors encountered during event bus operations"),
+	)
+	// Kept out of errorCounter: a drop and a subscriber failure are different
+	// problems with different remedies, and folding them together would make
+	// neither thresholdable on its own.
+	b.droppedCounter, _ = meter.Int64Counter("messaging.client.dropped.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Messages the event bus could not accept because its queue was full"),
+	)
+	b.undeliveredCounter, _ = meter.Int64Counter("messaging.client.undelivered.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Messages published to the event bus that matched no subscriber"),
 	)
 	b.latencyHistogram, _ = meter.Float64Histogram("messaging.client.operation.duration",
 		metric.WithUnit("s"),
@@ -193,13 +273,19 @@ func (b *basicEventBus) Start() error {
 					// ctx carries the publish span context; extract it to link delivery spans.
 					ctx := msg.Ctx
 
+					delivered := false
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
 							if ok, fields := matcher(msg.Topic); ok {
+								delivered = true
 								b.deliverAsync(ctx, msg.Topic, msg.Payload, fields, subscriber)
 								break
 							}
 						}
+					}
+
+					if !delivered {
+						b.noteUndelivered(ctx, msg.Topic, msg.Payload)
 					}
 
 				case MessageTypeEventSync:
@@ -583,10 +669,12 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 
 	// Process each matching subscriber, wrapping each delivery in a child consumer span.
 	var publishError error
+	delivered := false
 
 	for subscriber := range b.subscriptions {
 		for _, matcher := range b.subscriptions[subscriber] {
 			if ok, fields := matcher(msg.Topic); ok {
+				delivered = true
 				err := b.deliverSync(ctx, msg.Topic, req.payload, fields, subscriber)
 				if err != nil {
 					if publishError == nil {
@@ -603,9 +691,49 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 		}
 	}
 
+	if !delivered {
+		// The republish happens; the return value does not change. A caller who
+		// published to nobody never asked to be told about it, and pub/sub says
+		// that is legitimate — so the signal goes to the counter and to
+		// $undeliverable, not back up the call stack.
+		b.noteUndelivered(ctx, msg.Topic, req.payload)
+	}
+
 	// Send response back to caller
 	req.responseCh <- publishError
 	return publishError
+}
+
+// noteUndelivered counts a message that matched no subscriber and, when the bus
+// was built WithUndeliverable, republishes it under UndeliverableTopic.
+//
+// The counter is always kept: it is the diagnostic, it costs one atomic add on
+// a branch that was doing nothing at all, and it is the only sign a
+// configuration is dropping traffic on the floor.
+func (b *basicEventBus) noteUndelivered(ctx context.Context, topic string, payload any) {
+	atomic.AddUint64(&b.undelivered, 1)
+
+	if b.hasMetrics {
+		b.undeliveredCounter.Add(ctx, 1, b.metricAttrs(topic))
+	}
+
+	// A $-prefixed topic is never republished. Without this, a bus with the
+	// attribute on and no $undeliverable subscriber — the normal state for
+	// anyone who enables it and forgets the subscription — would feed itself
+	// forever at whatever rate it can sustain. The counter still climbs, which
+	// is exactly the number that says the handler is missing.
+	if !b.undeliverable || strings.HasPrefix(topic, "$") {
+		return
+	}
+
+	// Through Publish, not accept: the republish is a real publish and deserves
+	// its own producer span and sent-message count. Publish never blocks, so
+	// calling it from the delivery goroutine is safe; a full queue drops it and
+	// counts that drop, which is the right outcome.
+	//
+	// The context rides along verbatim so whatever it carries — a settler, a
+	// trace, a deadline — reaches the handler that gets to act on it.
+	b.Publish(withUndeliverableTopic(ctx, topic), UndeliverableTopic, payload)
 }
 
 // deliverSync delivers one sync event to a single subscriber, wrapped in a child consumer span.
@@ -646,7 +774,27 @@ func (b *basicEventBus) accept(msg EventBusMessage) {
 	case <-b.ctx.Done():
 		b.logger.Debug("EventBus stopped, message ignored")
 	default:
-		b.logger.Warn("Event bus channel full, message dropped")
+		b.recordDrop(msg.Ctx, msg.Topic, "publish")
+	}
+}
+
+// recordDrop accounts for a message the bus could not accept. A log line is not
+// a signal — it cannot be thresholded, alerted on, or read back by the process
+// that emitted it — so the warning is kept and a counter is kept beside it.
+func (b *basicEventBus) recordDrop(ctx context.Context, topic, op string) {
+	atomic.AddUint64(&b.dropped, 1)
+
+	b.logger.Warn("Event bus channel full, message dropped",
+		zap.String("bus", b.busName),
+		zap.String("topic", topic),
+		zap.String("operation", op),
+	)
+
+	if b.hasMetrics {
+		b.droppedCounter.Add(ctx, 1,
+			b.metricAttrs(topic),
+			metric.WithAttributes(attrKeyOperation.String(op)),
+		)
 	}
 }
 
@@ -670,8 +818,25 @@ func (b *basicEventBus) acceptWithResponse(msg EventBusMessage, responseCh chan 
 		b.logger.Debug("EventBus stopped, message ignored")
 		sendErrorResponse(fmt.Errorf("event bus stopped"))
 	default:
-		b.logger.Warn("Event bus channel full, message dropped")
+		b.recordDrop(msg.Ctx, msg.Topic, operationName(msg.MsgType))
 		sendErrorResponse(fmt.Errorf("event bus channel full"))
+	}
+}
+
+// operationName names a message type for the metric attribute that tells one
+// kind of drop from another.
+func operationName(msgType MessageType) string {
+	switch msgType {
+	case MessageTypeEventSync:
+		return "publish_sync"
+	case MessageTypeSubscribe, MessageTypeSubscribeWithExtraction:
+		return "subscribe"
+	case MessageTypeUnsubscribe:
+		return "unsubscribe"
+	case MessageTypeUnsubscribeAll:
+		return "unsubscribe_all"
+	default:
+		return "publish"
 	}
 }
 

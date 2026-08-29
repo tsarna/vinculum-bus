@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-29
+
+### Added
+
+- **The bus can say how full it is, and what it has thrown away.** A process
+  whose queue is saturated is still connected to everything, still passing every
+  check, and dropping messages on the floor — and from outside it is
+  indistinguishable from a healthy one. `EventBus` gains four accessors so it is
+  not:
+
+  ```go
+  bus.QueueDepth()       // messages accepted but not yet dispatched
+  bus.QueueCapacity()    // the buffer it was built with
+  bus.DroppedTotal()     // messages it could not accept
+  bus.UndeliveredTotal() // messages no subscriber matched
+  ```
+
+  Depth and capacity are `len`/`cap` — lock-free, safe from any goroutine, cheap
+  to poll forever. The two counters are plain atomics rather than metric
+  readbacks, so they can be read with no metrics backend configured, which is
+  what lets a program threshold on them.
+
+  Depth *and* capacity, not a ratio: the ratio is trivially derived, and "4096 of
+  4096" is what belongs in a log line.
+
+- **A dropped message is counted, not only logged.** `accept` ended in a bare
+  `default:` that logged a warning and moved on. A log line cannot be
+  thresholded, alerted on, or read back by the process that emitted it. The
+  warning stays and now carries the bus, topic, and operation; beside it the
+  `dropped` atomic and, when a `MeterProvider` is configured, a
+  `messaging.client.dropped.messages` counter attributed by topic and operation.
+  Kept out of `messaging.client.errors`, so a drop and a subscriber failure stay
+  separable.
+
+- **A message that matched no subscriber is counted.** The delivery loop was
+  already looking — it walks every subscriber's matchers and finds none that
+  answer — and said nothing about it: no log line, no metric, no error. A
+  receiver wired to a topic nothing consumes behaved exactly like a healthy idle
+  system. Counting it costs one boolean per publish, on both the async and the
+  sync path, and shows up as `UndeliveredTotal()` and
+  `messaging.client.undelivered.messages`.
+
+- **`WithUndeliverable(true)`: republish what nothing matched.** Opt-in per bus.
+  An unmatched message is republished under the reserved topic `$undeliverable`
+  carrying its **original context** and payload, with the topic that failed to
+  route reachable through `UndeliverableTopicFromContext(ctx)`:
+
+  ```go
+  eventBus, _ := bus.NewEventBus().WithUndeliverable(true).Build()
+  ```
+
+  The context riding along verbatim is the point: whatever it carries — a
+  settler for the inbound delivery, a trace, a deadline — reaches the handler
+  that gets to act on it, so an unroutable message can be rejected with a real
+  reason instead of waiting out a timeout and being redelivered into the same
+  hole.
+
+  A `$`-prefixed topic is **never** republished. Without that rule a bus with the
+  attribute on and no `$undeliverable` subscriber — the normal state for anyone
+  who enables it and forgets — would feed itself forever. Such a message is still
+  counted, which is exactly the number that says the handler is missing.
+
+  Off by default: publishing to a topic nobody wants is normal in pub/sub and
+  must stay free, and every unmatched publish would otherwise become a second
+  one on the same delivery goroutine. A synchronous publish republishes too, and
+  its return value is unchanged — a caller who published to nobody never asked
+  to be told.
+
+- **`AsyncQueueingSubscriber.DroppedTotal()`** — a subscriber with a queue is a
+  second, independent backpressure point, so counting only the bus's drops would
+  miss the one-slow-handler case. The overflow policy is deliberately unchanged:
+  this queue's users are outbound senders and subscription actions, for whom
+  drop-newest under sustained overload is defensible. What was missing was the
+  number saying it had happened.
+
+### Changed
+
+- **`AsyncQueueingSubscriber.QueueSize()` is now `QueueDepth()`**, matching the
+  bus accessor of the same meaning. `QueueCapacity()` is unchanged.
+
+### Fixed
+
+- **A data race in `mockClient`** (tests only). `AutoReconnector` reconnects from
+  its own goroutine, so the flags it set were read by the test while that
+  goroutine was still writing them, and `go test -race` failed on it.
+
 ## [0.16.0] - 2026-08-14
 
 ### Added
