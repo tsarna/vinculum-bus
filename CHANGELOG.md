@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-30
+
+### Added
+
+- **A vocabulary for settling an inbound delivery.** Acknowledgement is a
+  property of the delivery — of the message that arrived from a broker — and not
+  of the payload, nor of whichever subscriber handles it. It cannot travel in
+  `fields`, which are rewritten per subscription with that subscription's own
+  topic captures, so there has been no way for anything past the receiver to
+  acknowledge what it handled. It travels on the context instead, which crosses
+  every hop and which the async queue already preserves
+  (`context.WithoutCancel` drops cancellation and keeps values):
+
+  ```go
+  // in the receiver
+  ctx = bus.WithSettler(ctx, bus.NewSettler(myDeliveryOps))
+
+  // anywhere downstream, whatever the protocol
+  if s := bus.SettlerFromContext(ctx); s != nil {
+      settled, err := s.Ack(ctx)
+  }
+  ```
+
+  A receiver implements `SettleOps` — `Ack`, `Nack`, `Keepalive`, and `Valid` —
+  for one delivery, and `NewSettler` supplies the two rules that are easy to get
+  subtly wrong once per protocol. A delivery settles **exactly once**: the first
+  `Ack` or `Nack` wins and every later call is a no-op reporting `false`, so an
+  acknowledgement means "someone took responsibility" rather than "everyone
+  finished". And a settle against a token that has gone stale — `Valid` reports
+  it, an SQS receipt handle expiring with its visibility window, an AMQP
+  delivery tag re-pointed by a reconnect — never reaches the broker at all,
+  returning a `*StaleError` saying why. That case is not merely a failed
+  acknowledgement on every protocol: a stale AMQP tag acknowledges a *different*
+  message.
+
+  The bus itself never settles anything and never inspects a `Settler`.
+  Settling is the receiver's contract with its broker, and the bus knows nothing
+  about brokers; what is added here is only the vocabulary its consumers need in
+  common, in the one module all of them already depend on.
+
 ## [0.17.0] - 2026-08-29
 
 ### Added

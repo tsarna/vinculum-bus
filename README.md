@@ -105,6 +105,42 @@ type Subscriber interface {
 }
 ```
 
+### Settling an Inbound Delivery
+
+Acknowledgement is a property of the inbound delivery, not of the payload and
+not of the subscriber that handles it. It cannot travel in `fields` — those are
+rewritten per subscription with that subscription's own topic captures — so it
+travels on the context, which crosses every hop and which the async queue
+preserves (`context.WithoutCancel` drops cancellation and keeps values).
+
+A receiver that consumes from an acknowledging broker implements `SettleOps`
+for each delivery, wraps it, and puts it on the context it delivers with:
+
+```go
+ctx = bus.WithSettler(ctx, bus.NewSettler(myDeliveryOps))
+err := subscriber.OnEvent(ctx, topic, payload, fields)
+```
+
+Anything downstream — across transforms, async queues, and bus hops — settles it
+without knowing which protocol produced it:
+
+```go
+if s := bus.SettlerFromContext(ctx); s != nil {
+    settled, err := s.Ack(ctx)   // settled reports whether this call was the one
+}
+```
+
+`NewSettler` supplies the two rules that are easy to get subtly wrong per
+protocol: a delivery settles **exactly once** — first `Ack` or `Nack` wins,
+every later call is a no-op reporting `false` — and a settle against a token
+that has gone stale (`SettleOps.Valid`) reaches the broker not at all,
+returning a `*StaleError` explaining why. An acknowledgement means "someone took
+responsibility", not "everyone finished".
+
+The bus itself never settles anything and never inspects a `Settler`. Settling
+is the receiver's contract with its broker; what lives here is only the
+vocabulary its consumers need in common.
+
 ### Creating EventBus
 
 #### Builder Pattern
