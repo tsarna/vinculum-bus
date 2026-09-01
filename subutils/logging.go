@@ -40,6 +40,28 @@ func NewNamedLoggingSubscriber(wrapped bus.Subscriber, logger *zap.Logger, logLe
 	}
 }
 
+// Unwrap returns the wrapped subscriber, so a caller asking what a delivery's
+// return will mean can see past the log line to what is behind it. It is nil
+// when this subscriber is standalone.
+func (l *LoggingSubscriber) Unwrap() bus.Subscriber { return l.wrapped }
+
+// DeliveryDisposition reports a standalone logger as an observer.
+//
+// With nothing wrapped this is a tap: it prints the message and takes no
+// responsibility for it. Reading its nil return as "handled" would let a
+// logger attached to a bus carrying broker deliveries acknowledge a message it
+// merely printed, and its failure to format one would send real traffic back
+// for redelivery. Observation must not change delivery.
+//
+// Wrapping something is the opposite case, and reports Handled so the question
+// passes through Unwrap to whatever is actually doing the work.
+func (l *LoggingSubscriber) DeliveryDisposition() bus.Disposition {
+	if l.wrapped == nil {
+		return bus.Observed
+	}
+	return bus.Handled
+}
+
 // OnSubscribe logs subscription events and calls the wrapped subscriber if present
 func (l *LoggingSubscriber) OnSubscribe(ctx context.Context, topic string) error {
 	l.logger.Log(l.logLevel, "OnSubscribe called",

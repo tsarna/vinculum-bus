@@ -3,6 +3,7 @@ package subutils
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +140,11 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 // in a new-root SpanKindConsumer span linked to the caller's span context. This
 // preserves the causal link to the upstream work without tying the async
 // processing span to the producer's lifecycle.
+// Settling is confined to event messages. A subscribe, unsubscribe, tick or
+// pass-through is not a delivery — nothing acknowledged it to a broker and
+// nothing is waiting on its outcome — so even where one carries a context with
+// a settler on it, that settler belongs to some other message's delivery and
+// this is not the place to decide it.
 func (a *AsyncQueueingSubscriber) processMessage(msg bus.EventBusMessage) {
 	ctx := context.WithoutCancel(msg.Ctx)
 
@@ -148,11 +154,51 @@ func (a *AsyncQueueingSubscriber) processMessage(msg bus.EventBusMessage) {
 		defer span.End()
 	}
 
+	// A panic mid-work must not leave the delivery unsettled. Nothing upstream
+	// is waiting on this goroutine, so the message would simply sit until its
+	// broker lease lapsed, with nothing anywhere saying why. Telling the broker
+	// first changes what it hears, not what the process then does: the panic
+	// continues on its way.
+	defer func() {
+		if r := recover(); r != nil {
+			if msg.MsgType == bus.MessageTypeEvent {
+				bus.SettleRefused(ctx, fmt.Sprintf("panic while handling %s: %v", msg.Topic, r))
+			}
+			panic(r)
+		}
+	}()
+
 	err := a.dispatch(ctx, msg)
 	if err != nil && span != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
+
+	// This is a settle point, and it is the one this queue exists to move. The
+	// enqueue that put the message here returned long ago; the work happened
+	// just now, on this goroutine, and its outcome is err.
+	if msg.MsgType == bus.MessageTypeEvent {
+		bus.SettleOnReturn(ctx, a.wrapped, err)
+	}
+}
+
+// Unwrap returns the subscriber this queue feeds, so a caller asking whether
+// delivery is deferred can see past the queue to what is behind it.
+func (a *AsyncQueueingSubscriber) Unwrap() bus.Subscriber { return a.wrapped }
+
+// DeliveryDisposition reports that a queued message is not a handled one.
+//
+// OnEvent below puts the message on the queue and returns; processMessage above
+// runs it later, on another goroutine, and settles there. A caller settling on
+// the enqueue instead would acknowledge every message the instant it was
+// accepted — which is the whole defect a queue in front of a broker receiver
+// used to introduce.
+//
+// This is true whatever the queue feeds. A queue in front of an observer really
+// does defer — the message is on a channel and nothing has looked at it yet —
+// and the drain asks the question again of what it wraps.
+func (a *AsyncQueueingSubscriber) DeliveryDisposition() bus.Disposition {
+	return bus.Deferred
 }
 
 // dispatch routes a message to the appropriate wrapped subscriber method.

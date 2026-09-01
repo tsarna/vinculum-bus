@@ -41,6 +41,12 @@ func NewTransformingSubscriber(wrapped bus.Subscriber, transforms ...transform.M
 	}
 }
 
+// Unwrap returns the wrapped subscriber, so a caller asking whether delivery is
+// deferred can see past this wrapper to what is behind it. Reporting the answer
+// for a transform chain rather than for the thing on the end of it would have a
+// settle point acknowledge a message at the moment it entered a queue.
+func (t *TransformingSubscriber) Unwrap() bus.Subscriber { return t.wrapped }
+
 // OnSubscribe passes through to the wrapped subscriber
 func (t *TransformingSubscriber) OnSubscribe(ctx context.Context, topic string) error {
 	return t.wrapped.OnSubscribe(ctx, topic)

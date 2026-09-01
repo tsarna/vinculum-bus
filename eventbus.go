@@ -273,11 +273,20 @@ func (b *basicEventBus) Start() error {
 					// ctx carries the publish span context; extract it to link delivery spans.
 					ctx := msg.Ctx
 
+					// An observer matching does not make the message
+					// delivered. A debugging tap or an audit logger takes no
+					// responsibility for what it looks at, so a message only
+					// observers matched has been taken up by nobody and takes
+					// the same path as one that matched nothing at all —
+					// counted, and settled by whatever policy the bus has for
+					// messages nothing wanted.
 					delivered := false
 					for subscriber := range b.subscriptions {
 						for _, matcher := range b.subscriptions[subscriber] {
 							if ok, fields := matcher(msg.Topic); ok {
-								delivered = true
+								if DispositionOf(subscriber) != Observed {
+									delivered = true
+								}
 								b.deliverAsync(ctx, msg.Topic, msg.Payload, fields, subscriber)
 								break
 							}
@@ -349,8 +358,19 @@ func (b *basicEventBus) Start() error {
 // deliverAsync delivers one async event to a single subscriber, wrapped in a new-root consumer
 // span linked to the publish span (per OTel messaging semantic conventions for async pub/sub).
 func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload any, fields map[string]string, subscriber Subscriber) {
+	// Detach from the producer's context cancellation for async delivery —
+	// the producer may have already returned (e.g. an HTTP handler whose
+	// request context is canceled after the response is sent). WithoutCancel
+	// preserves context values — the publish span, and any settler the
+	// delivery carries — while preventing cancellation propagation.
+	ctx = context.WithoutCancel(ctx)
+
+	// Tracing changes what this function records, not what it does, so the
+	// span is the only branch: the delivery, the settle and the error handling
+	// below are one path. Splitting them would let the two diverge silently,
+	// visible only in configurations that happen to have a TracerProvider.
+	var deliverySpan trace.Span
 	if b.tracer != nil {
-		publishSpanCtx := trace.SpanFromContext(ctx).SpanContext()
 		spanOpts := []trace.SpanStartOption{
 			trace.WithNewRoot(),
 			trace.WithSpanKind(trace.SpanKindConsumer),
@@ -359,48 +379,39 @@ func (b *basicEventBus) deliverAsync(ctx context.Context, topic string, payload 
 				semconv.MessagingOperationNameKey.String("process"),
 			)...),
 		}
-		if publishSpanCtx.IsValid() {
+		if publishSpanCtx := trace.SpanFromContext(ctx).SpanContext(); publishSpanCtx.IsValid() {
 			spanOpts = append(spanOpts, trace.WithLinks(trace.Link{SpanContext: publishSpanCtx}))
 		}
-		var deliverySpan trace.Span
-		ctx, deliverySpan = b.tracer.Start(context.WithoutCancel(ctx), "process "+topic, spanOpts...)
+		ctx, deliverySpan = b.tracer.Start(ctx, "process "+topic, spanOpts...)
 		defer deliverySpan.End()
+	}
 
-		if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
-			// Only the log line is skipped for an error the subscriber has
-			// already reported; the span and the counter see every failure.
-			if !alreadyReported(err) {
-				b.logger.Error("Error in OnEvent", zap.Error(err))
-			}
-			deliverySpan.RecordError(err)
-			deliverySpan.SetStatus(codes.Error, err.Error())
-			if b.hasMetrics {
-				b.errorCounter.Add(ctx, 1,
-					b.metricAttrs(topic),
-					metric.WithAttributes(attrKeyOperation.String("on_event")),
-				)
-			}
-		}
+	err := subscriber.OnEvent(ctx, topic, payload, fields)
+
+	// This is a settle point: the subscriber has either done the work or said
+	// it deferred it, and either way the delivery's outcome is now known here
+	// and nowhere upstream. It runs before the reporting below so the broker
+	// hears first, and inside the delivery span so the settle is attributable.
+	SettleOnReturn(ctx, subscriber, err)
+
+	if err == nil {
 		return
 	}
 
-	// Detach from the producer's context cancellation for async delivery —
-	// the producer may have already returned (e.g. an HTTP handler whose
-	// request context is canceled after the response is sent). WithoutCancel
-	// preserves context values (including trace spans) while preventing
-	// cancellation propagation.
-	ctx = context.WithoutCancel(ctx)
-
-	if err := subscriber.OnEvent(ctx, topic, payload, fields); err != nil {
-		if !alreadyReported(err) {
-			b.logger.Error("Error in OnEvent", zap.Error(err))
-		}
-		if b.hasMetrics {
-			b.errorCounter.Add(ctx, 1,
-				b.metricAttrs(topic),
-				metric.WithAttributes(attrKeyOperation.String("on_event")),
-			)
-		}
+	// Only the log line is skipped for an error the subscriber has already
+	// reported; the span and the counter see every failure.
+	if !alreadyReported(err) {
+		b.logger.Error("Error in OnEvent", zap.Error(err))
+	}
+	if deliverySpan != nil {
+		deliverySpan.RecordError(err)
+		deliverySpan.SetStatus(codes.Error, err.Error())
+	}
+	if b.hasMetrics {
+		b.errorCounter.Add(ctx, 1,
+			b.metricAttrs(topic),
+			metric.WithAttributes(attrKeyOperation.String("on_event")),
+		)
 	}
 }
 
@@ -674,7 +685,11 @@ func (b *basicEventBus) doPublishSync(msg EventBusMessage) error {
 	for subscriber := range b.subscriptions {
 		for _, matcher := range b.subscriptions[subscriber] {
 			if ok, fields := matcher(msg.Topic); ok {
-				delivered = true
+				// An observer does not make the message delivered — see the
+				// async loop in Start, which says why.
+				if DispositionOf(subscriber) != Observed {
+					delivered = true
+				}
 				err := b.deliverSync(ctx, msg.Topic, req.payload, fields, subscriber)
 				if err != nil {
 					if publishError == nil {
@@ -722,18 +737,37 @@ func (b *basicEventBus) noteUndelivered(ctx context.Context, topic string, paylo
 	// anyone who enables it and forgets the subscription — would feed itself
 	// forever at whatever rate it can sustain. The counter still climbs, which
 	// is exactly the number that says the handler is missing.
-	if !b.undeliverable || strings.HasPrefix(topic, "$") {
+	if b.undeliverable && !strings.HasPrefix(topic, "$") {
+		// Through Publish, not accept: the republish is a real publish and
+		// deserves its own producer span and sent-message count. Publish never
+		// blocks, so calling it from the delivery goroutine is safe; a full
+		// queue drops it and counts that drop, which is the right outcome.
+		//
+		// The context rides along verbatim so whatever it carries — a settler,
+		// a trace, a deadline — reaches the handler that gets to act on it.
+		// Nothing is settled here: the handler has not run yet, and settling
+		// now would decide the delivery's outcome before it has one.
+		b.Publish(withUndeliverableTopic(ctx, topic), UndeliverableTopic, payload)
 		return
 	}
 
-	// Through Publish, not accept: the republish is a real publish and deserves
-	// its own producer span and sent-message count. Publish never blocks, so
-	// calling it from the delivery goroutine is safe; a full queue drops it and
-	// counts that drop, which is the right outcome.
-	//
-	// The context rides along verbatim so whatever it carries — a settler, a
-	// trace, a deadline — reaches the handler that gets to act on it.
-	b.Publish(withUndeliverableTopic(ctx, topic), UndeliverableTopic, payload)
+	// Past here nothing else will see this message, so if it arrived over a
+	// transport that acknowledges, this is where its outcome is decided. Which
+	// way depends on whether anyone asked to hear about undeliverable messages.
+	if b.undeliverable {
+		// They did, and then left $undeliverable itself unhandled. That is a
+		// mistake rather than a configuration, so the message goes back.
+		SettleRefused(ctx, "no subscriber matched "+topic)
+		return
+	}
+
+	// Nobody asked. A topic matching no subscription is then a routing outcome
+	// the configuration chose — the subscription set said nothing wanted this —
+	// and it reads the same way as a sender deliberately discarding a message.
+	// Nacking instead would turn an unsubscribed topic into a redelivery loop
+	// on every transport that redelivers. The counter above is the diagnostic
+	// for a topic pattern that was meant to match and does not.
+	SettleOnReturn(ctx, nil, nil)
 }
 
 // deliverSync delivers one sync event to a single subscriber, wrapped in a child consumer span.
@@ -761,10 +795,18 @@ func (b *basicEventBus) deliverSync(ctx context.Context, topic string, payload a
 }
 
 // accept sends a message to the event bus's channel (for publish operations - no response needed)
+//
+// Every path that refuses the message also nacks it. Publish returns nil
+// whatever happens here — a dropped message is not an error to the publisher,
+// and basicEventBus.OnEvent discards even that — so nothing upstream can learn
+// that the message was refused, and a delivery that acknowledges on its
+// caller's return would report work that will now never happen. Refusing is the
+// one thing a bus can say for itself.
 func (b *basicEventBus) accept(msg EventBusMessage) {
 	// Quick atomic check - no mutex needed
 	if atomic.LoadInt32(&b.started) == 0 {
 		b.logger.Warn("Event bus not started, message ignored")
+		SettleRefused(msg.Ctx, "event bus "+b.busName+" not started")
 		return
 	}
 
@@ -773,8 +815,10 @@ func (b *basicEventBus) accept(msg EventBusMessage) {
 		// Message sent successfully
 	case <-b.ctx.Done():
 		b.logger.Debug("EventBus stopped, message ignored")
+		SettleRefused(msg.Ctx, "event bus "+b.busName+" stopped")
 	default:
 		b.recordDrop(msg.Ctx, msg.Topic, "publish")
+		SettleRefused(msg.Ctx, "event bus "+b.busName+" queue full")
 	}
 }
 
@@ -799,6 +843,11 @@ func (b *basicEventBus) recordDrop(ctx context.Context, topic, op string) {
 }
 
 // acceptWithResponse sends a subscription message and handles error responses
+//
+// Unlike accept, this reports every refusal to its caller, so it settles
+// nothing: whoever called PublishSync has the outcome in hand and is the settle
+// point. Nacking here as well would decide a delivery the caller is still
+// deciding.
 func (b *basicEventBus) acceptWithResponse(msg EventBusMessage, responseCh chan error) {
 	sendErrorResponse := func(err error) {
 		responseCh <- err
@@ -874,3 +923,13 @@ func (b *basicEventBus) OnUnsubscribe(ctx context.Context, topic string) error {
 func (b *basicEventBus) PassThrough(msg EventBusMessage) error {
 	return nil
 }
+
+// DeliveryDisposition reports that a bus hop is not the work.
+//
+// OnEvent above puts the message on this bus's channel and returns; the
+// subscribers that will actually handle it have not run, and may not exist. So
+// a caller settling on that return would acknowledge a delivery at the moment
+// it was queued. deliverAsync settles instead, once per subscriber, after the
+// subscriber has answered — which is what makes an acknowledgement follow the
+// work across any number of bus hops.
+func (b *basicEventBus) DeliveryDisposition() Disposition { return Deferred }

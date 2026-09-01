@@ -7,6 +7,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settling follows the work, not the hand-off.** A delivery used to be
+  settled where it was made, on the assumption that a subscriber returning
+  meant the work was done. That is exact only while delivery is synchronous:
+  a bus returns once the message is on its channel, and an
+  `AsyncQueueingSubscriber` once it is on the queue — so the broker was told
+  the message had been handled before anything had handled it, and a failure
+  afterwards had nothing left to redeliver.
+
+  `SettleOnReturn(ctx, callee, err)` is the rule, and it is one function
+  because it is the same five lines at every settle point:
+
+  - `err != nil` nacks, whatever the mode. Under manual this looks like taking
+    back a decision the configuration asked for, and is not — an unsettled
+    delivery there is bounded by a settle deadline whose expiry nacks anyway,
+    so the two differ in latency and in whether the broker is told why.
+  - a synchronous callee returning nil acks, if the delivery is
+    framework-settled.
+  - a callee that says it *deferred* settles nothing here; it settles at its
+    own completion point.
+
+  `SettleRefused(ctx, reason)` is the other half: a message nothing ran — a
+  full queue, a closed subscriber, a bus that dropped it — nacks in either
+  mode. Nothing ran, so there is no decision to preempt.
+
+- **`Disposition`, `Dispositioned` and `DispositionOf`.** What a subscriber's
+  return says about the delivery, in three answers rather than the two a
+  boolean could hold:
+
+  - `Handled` — the work is done and the returned error is its outcome. The
+    zero value, so it is what a subscriber says by saying nothing, which is
+    right for every leaf and every pass-through wrapper.
+  - `Deferred` — accepted for later; the subscriber settles at its own
+    completion point. An *error* from a deferring subscriber is a refusal
+    rather than a failure, and nacks.
+  - `Observed` — looked at, no responsibility taken. A debugging tap, a
+    printer, an audit logger. Never a settle point and not expected to become
+    one.
+
+  `Observed` exists because reading a tap's nil return as "handled" would let a
+  debugging tool acknowledge a broker message it merely printed, and reading
+  its *error* as a refusal would send real traffic back for redelivery because
+  a printer could not format something. Observation must not change delivery.
+  Borrowing `Deferred` for this would get one of the three right and leave an
+  observer indistinguishable from a deferrer that has gone missing.
+
+  `DispositionOf` walks `Unwrap() Subscriber`, so a transform or a logger
+  cannot hide what it wraps — a wrapper that did would make its caller settle
+  on the wrapper's own return, with no error and no log line anywhere.
+
+  Which way it is safe to be wrong is part of the contract: claiming `Handled`
+  when you did not handle costs a premature acknowledgement, which is
+  unrecoverable, so anything unsure of itself should not claim it.
+
+- **A message that only observers matched is undelivered.** Nobody took it up,
+  so it is counted and settled exactly as one that matched no subscriber at
+  all. This is what keeps attaching a tap from silencing `UndeliveredTotal()`,
+  which is the diagnostic for a topic pattern that was meant to match.
+
+- **A standalone `LoggingSubscriber` is an observer.** With nothing wrapped it
+  is a tap, and it no longer acknowledges what it prints or nacks what it fails
+  to print. Wrapping something is unchanged — the question passes through
+  `Unwrap` to whatever is actually doing the work.
+
+- **`Settler.Auto()` and the `AutoSettle()` option**, distinguishing a delivery
+  the framework settles from one the configuration will. It rides on the handle
+  rather than beside it on the context: two keys that have to agree is a bug
+  factory, and hanging it here means there is nowhere to put one without the
+  other.
+
+- **`WithoutSettler(ctx)`**, for deriving a new message from a delivery rather
+  than handing the same one on. Responsibility should not propagate past where
+  it was discharged — three derived messages racing to settle one delivery
+  would make the winner arbitrary.
+
+- **`Unwrap() Subscriber` on `AsyncQueueingSubscriber`, `TransformingSubscriber`
+  and `LoggingSubscriber`.** Needed by `Defers`, and independently useful:
+  there was no way to ask what a wrapped subscriber actually is.
+
+### Changed
+
+- **Delivery into a bus no longer counts as handling.** `basicEventBus`
+  reports `DefersDelivery`, and `deliverAsync` settles once per subscriber
+  after that subscriber has answered — so an acknowledgement follows the work
+  across any number of bus hops. Under fan-out it still settles once: an
+  acknowledgement means someone took responsibility, not that everyone
+  finished.
+
+- **A message the bus refuses is nacked rather than silently dropped.**
+  `Publish` returns nil whether or not the message was accepted, and
+  `basicEventBus.OnEvent` discards even that, so nothing upstream could learn
+  that a message was dropped. A queue-full, not-started or stopped bus now
+  says so to the delivery's settler.
+
+- **A message that matched no subscriber settles according to whether anyone
+  asked to hear about it.** With `WithUndeliverable(false)` — the default — it
+  is acknowledged: nothing asked, and a topic matching no subscription is a
+  routing outcome the configuration chose. Nacking there would turn an
+  unsubscribed topic into a redelivery loop. With the option on, the
+  republished message reaches a real subscription and *that* decides; only a
+  `$undeliverable` which itself matches nothing is nacked, which is the case
+  where the author asked to be told and then did not listen.
+
+- **A panic in the async drain goroutine nacks before it unwinds.** The panic
+  still brings the process down; the difference is that the broker hears why
+  now instead of waiting out a lease.
+
+- **A nack reason is bounded once, in `Settler.Nack`.** Settle points hand it
+  whatever error the work returned, which can be a rendered multi-line
+  diagnostic, and it goes on to become a dead-letter header. Truncation is at
+  the one point every nack passes through, on a rune boundary, rather than
+  once per protocol and differently each time.
+
 ## [0.18.0] - 2026-08-30
 
 ### Added

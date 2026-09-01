@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // Acknowledgement is a property of an inbound delivery — of the message that
@@ -51,6 +52,16 @@ type Settler interface {
 	// reports whether anything was extended, and does not settle: a delivery
 	// may be kept alive any number of times, and not at all once settled.
 	Keepalive(ctx context.Context) (bool, error)
+
+	// Auto reports that this delivery is settled by the framework, on the
+	// outcome of the work, because nothing in the configuration will settle it.
+	//
+	// It rides on the handle rather than beside it on the context, because two
+	// keys that have to agree is a bug factory: a flag with no settler is a
+	// delivery nothing can settle, a settler with no flag is a delivery nothing
+	// will, and neither is detectable. Hanging it here makes the invariant
+	// structural — there is nowhere to put one without the other.
+	Auto() bool
 }
 
 // SettleOps are one receiver's protocol verbs for one delivery. Implement it
@@ -105,23 +116,67 @@ func IsStale(err error) bool {
 	return errors.As(err, &stale)
 }
 
+// SettlerOption configures a Settler at construction.
+type SettlerOption func(*settler)
+
+// AutoSettle marks deliveries as settled by the framework, on the outcome of
+// the work — the receiver's choice, made once when it builds the settler, and
+// read at every settle point downstream. See Settler.Auto.
+func AutoSettle() SettlerOption {
+	return func(s *settler) { s.auto = true }
+}
+
 // NewSettler returns a Settler enforcing the settle-once and staleness rules
 // over ops.
-func NewSettler(ops SettleOps) Settler {
-	return &settler{ops: ops}
+func NewSettler(ops SettleOps, opts ...SettlerOption) Settler {
+	s := &settler{ops: ops}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 type settler struct {
 	ops     SettleOps
+	auto    bool
 	settled atomic.Bool
 }
+
+func (s *settler) Auto() bool { return s.auto }
 
 func (s *settler) Ack(ctx context.Context) (bool, error) {
 	return s.settle(func() error { return s.ops.Ack(ctx) })
 }
 
 func (s *settler) Nack(ctx context.Context, reason string) (bool, error) {
+	reason = truncateNackReason(reason)
 	return s.settle(func() error { return s.ops.Nack(ctx, reason) })
+}
+
+// maxNackReasonBytes bounds the advisory reason carried with a Nack.
+const maxNackReasonBytes = 512
+
+// truncateNackReason bounds reason to something a header can hold.
+//
+// A reason reaches a dead-letter header, a stream annotation, or a log field,
+// and it is not always short: the settle points hand it whatever error the work
+// returned, and an expression failure renders as a multi-line diagnostic
+// quoting the source line that threw. Bounding it here, at the one point every
+// nack passes through, is what stops each protocol from bounding it separately
+// and differently — and from discovering the need only after the value has been
+// copied into a header the broker then rejects.
+func truncateNackReason(reason string) string {
+	if len(reason) <= maxNackReasonBytes {
+		return reason
+	}
+
+	const ellipsis = "…"
+	cut := maxNackReasonBytes - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+
+	return reason[:cut] + ellipsis
 }
 
 // settle runs do exactly once across every caller that shares this delivery.
@@ -184,4 +239,81 @@ func WithSettler(ctx context.Context, s Settler) context.Context {
 func SettlerFromContext(ctx context.Context) Settler {
 	s, _ := ctx.Value(settlerContextKey{}).(Settler)
 	return s
+}
+
+// WithoutSettler returns ctx with any settler removed, for deriving a *new*
+// message from the one being handled rather than handing the same one on.
+//
+// Responsibility for a delivery should not propagate past the point where it
+// was discharged. A handler that derives three messages from one delivery would
+// otherwise leave three things racing to settle it, and settle-once makes the
+// winner arbitrary — the delivery would report whichever branch happened to
+// finish first as its outcome, which is a coin flip rather than a decision.
+// Passing the delivery to another subscriber is the opposite case and keeps the
+// settler: there is still exactly one thing whose completion is the answer.
+func WithoutSettler(ctx context.Context) context.Context {
+	if SettlerFromContext(ctx) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, settlerContextKey{}, Settler(nil))
+}
+
+// SettleOnReturn settles a delivery on the outcome of handing it to callee,
+// where callee returned err. It does nothing when there is no delivery to
+// settle, nothing when the configuration settles its own deliveries, and
+// nothing when callee's return was not a claim about the work — in which case
+// either the callee settles later or nobody does.
+//
+// callee may be nil, which is Handled. That is how a subscriber that has
+// already deferred settles at its own completion point — an event loop after
+// its hooks, a produce callback after the broker answered — where there is no
+// callee left to ask about.
+//
+// The order of the checks is load-bearing:
+//
+//   - An observer is asked first, because neither its success nor its failure
+//     is about the delivery. A tap that cannot print a message must not nack
+//     the message.
+//   - An error then settles negatively whatever the mode. Under auto that is
+//     what auto means. Under manual it looks like taking back a decision the
+//     configuration asked for, and is not: an unsettled delivery under manual
+//     is bounded by settle_timeout, whose expiry nacks, so the two differ in
+//     latency and in whether the broker is told why — not in outcome. This is
+//     also what makes an error from a *deferring* callee a refusal: it did not
+//     defer, it declined, and nothing ran.
+//   - Only then does deferral matter, and only for the success case.
+func SettleOnReturn(ctx context.Context, callee Subscriber, err error) {
+	settler := SettlerFromContext(ctx)
+	if settler == nil {
+		return
+	}
+
+	disposition := DispositionOf(callee)
+	if disposition == Observed {
+		return
+	}
+
+	if err != nil {
+		settler.Nack(ctx, err.Error())
+		return
+	}
+
+	if !settler.Auto() || disposition == Deferred {
+		return
+	}
+
+	settler.Ack(ctx)
+}
+
+// SettleRefused settles a delivery nothing ran: a full queue, a closed
+// subscriber, a bus that dropped the message, a topic nothing matched.
+//
+// It nacks whatever the mode, because there is no author decision to preempt.
+// Under manual it is an acceleration of what settle_timeout would say later
+// anyway, and it stops a message that was never delivered from holding a
+// prefetch slot until then.
+func SettleRefused(ctx context.Context, reason string) {
+	if settler := SettlerFromContext(ctx); settler != nil {
+		settler.Nack(ctx, reason)
+	}
 }
