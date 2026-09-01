@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-01
+
 ### Added
 
 - **Settling follows the work, not the hand-off.** A delivery used to be
