@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`AsyncQueueingSubscriber` can process several messages at once, in order
+  where it matters.** One goroutine draining a queue is one message at a time;
+  `WithPartitions(n)` runs `n` queues, each with its own goroutine.
+
+  A message picks its queue by hashing a key, so two messages with the same key
+  are always handled by the same goroutine in the order they were enqueued,
+  while messages with different keys are handled concurrently. The key is
+  therefore where ordering is configured, and the partition count only says how
+  much parallelism everything else may use.
+
+  - `WithPartitionKey(fn)` supplies the key; without it the key is the message's
+    topic. It is called on the *enqueueing* goroutine, so it must be cheap and
+    must be a pure function of the message.
+  - `WithoutOrdering()` deals messages round-robin instead, preserving no order
+    at all. It is worth its own spelling because the alternative — a key
+    contrived to vary per message — is both slower and less evenly spread than
+    counting. The two are alternatives, not layers: whichever was called last is
+    what happens.
+  - `Partitions()` and `MaxQueueDepth()` report the shape and the fullest
+    partition. `QueueDepth()` stays a total across partitions, because what asks
+    it is a shutdown waiting for everything to be done.
+
+  The queue size passed to `NewAsyncQueueingSubscriber` is **per partition**, so
+  memory and in-flight count are both multiplied by the partition count. Keys
+  that hash together share a queue, so one slow key holds up the unrelated keys
+  behind it — a share of the traffic rather than all of it, which is the trade
+  for partitions that never contend with each other.
+
+  Only events are keyed: a subscribe, unsubscribe or pass-through partitions on
+  its topic, since a key function is written against a message. A ticker fires
+  on partition 0 alone, so a wrapped subscriber still sees one tick per interval
+  however many partitions are draining.
+
+  Unpartitioned is the default and unchanged, down to the code path: one queue,
+  one goroutine, and no hash computed.
+
 ## [0.19.0] - 2026-09-01
 
 ### Added

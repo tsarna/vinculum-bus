@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,12 +23,38 @@ var (
 	ErrSubscriberClosed = errors.New("subscriber is closed")
 )
 
+// PartitionKeyFunc computes the ordering key for a message.
+//
+// Messages with equal keys go to the same queue and are therefore processed by
+// the same goroutine, in the order they were enqueued; messages with different
+// keys may be processed concurrently. Choosing the key is choosing what must
+// stay in order.
+//
+// Two properties matter, and neither is checkable here:
+//
+// It must be cheap. This is called on the *enqueueing* goroutine — the poll
+// loop or bus dispatch that a queue exists to keep moving — so its cost is
+// charged to the thing the queue was protecting.
+//
+// It must be a pure function of the message. A key drawn from the clock or a
+// random source puts successive messages about one thing in different queues,
+// which is the ordering guarantee saying it holds while it does not.
+type PartitionKeyFunc func(msg bus.EventBusMessage) string
+
 // AsyncQueueingSubscriber wraps another subscriber and processes events asynchronously
 // through a buffered channel queue. This allows the calling thread to return immediately
 // while events are processed in a background goroutine.
+//
+// With more than one partition (see WithPartitions) there are that many queues
+// and that many goroutines, and a message picks its queue by hashing a key.
+// Equal keys therefore keep their order and different keys run concurrently.
 type AsyncQueueingSubscriber struct {
-	wrapped   bus.Subscriber
-	queue     chan bus.EventBusMessage
+	wrapped bus.Subscriber
+
+	// queues holds one channel per partition, and always at least one. An
+	// unpartitioned subscriber is the same code over a slice of length one
+	// rather than a second path through it.
+	queues    []chan bus.EventBusMessage
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -34,10 +62,24 @@ type AsyncQueueingSubscriber struct {
 	tracer    trace.Tracer // Optional tracer for per-message consumer spans
 	name      string       // Optional name for span attributes
 
+	// keyFn computes the partition key, or is nil to key on the topic.
+	keyFn PartitionKeyFunc
+
+	// unordered abandons keying entirely and deals messages round-robin over
+	// next, for work with no ordering requirement at all. Set only by
+	// WithoutOrdering, which is what makes it distinguishable from a key
+	// function that happens to return the same thing every time.
+	unordered bool
+	next      uint32
+
 	// dropped counts messages refused because the queue was full. A subscription
 	// with a queue is a second, independent backpressure point: counting only
 	// the bus's drops would miss the one-slow-handler case, which is the common
 	// shape.
+	//
+	// It is a total across partitions. Which partition refused a message is a
+	// question for a span, not a counter: what a configuration acts on is that
+	// something was refused at all.
 	dropped uint64
 }
 
@@ -63,11 +105,72 @@ func NewAsyncQueueingSubscriber(wrapped bus.Subscriber, queueSize int) *AsyncQue
 
 	subscriber := &AsyncQueueingSubscriber{
 		wrapped: wrapped,
-		queue:   make(chan bus.EventBusMessage, queueSize),
+		queues:  []chan bus.EventBusMessage{make(chan bus.EventBusMessage, queueSize)},
 		done:    make(chan struct{}),
 	}
 
 	return subscriber
+}
+
+// WithPartitions runs n queues instead of one, each drained by its own
+// goroutine, so that n messages can be processed at once.
+//
+// Order is preserved within a partition and not across partitions, and which
+// partition a message lands in is decided by hashing its key — the topic, or
+// whatever WithPartitionKey supplies. So the key is the configuration of what
+// must stay in order, and n is how much parallelism is available to everything
+// that need not.
+//
+// Two consequences worth knowing before setting it:
+//
+// The queue size passed to NewAsyncQueueingSubscriber is *per partition*, so
+// the memory and the in-flight count are both multiplied by n.
+//
+// Keys that hash together share a queue, so one slow key holds up the unrelated
+// keys behind it — a 1/n share of the traffic rather than all of it, which is
+// the trade this shape makes for having no shared state between partitions.
+//
+// n below 1 is treated as 1. Must be called before Start().
+func (a *AsyncQueueingSubscriber) WithPartitions(n int) *AsyncQueueingSubscriber {
+	if n < 1 {
+		n = 1
+	}
+
+	size := cap(a.queues[0])
+	a.queues = make([]chan bus.EventBusMessage, n)
+	for i := range a.queues {
+		a.queues[i] = make(chan bus.EventBusMessage, size)
+	}
+
+	return a
+}
+
+// WithPartitionKey sets the function deciding which messages must stay in order
+// relative to each other. Without it, that is the message's topic.
+//
+// It has no effect with a single partition, where everything is already
+// ordered. Calling it clears WithoutOrdering, so the two can be called in
+// either order and the last one wins rather than blending. Must be called
+// before Start().
+func (a *AsyncQueueingSubscriber) WithPartitionKey(fn PartitionKeyFunc) *AsyncQueueingSubscriber {
+	a.keyFn = fn
+	a.unordered = false
+	return a
+}
+
+// WithoutOrdering deals messages to partitions round-robin, preserving no order
+// at all, for work where none is required — every message independent of every
+// other.
+//
+// It is worth having as its own spelling because the alternative a configuration
+// would otherwise reach for is a key that varies per message, and a random or
+// clock-derived key is both slower and less evenly spread than counting.
+//
+// Calling it clears WithPartitionKey. Must be called before Start().
+func (a *AsyncQueueingSubscriber) WithoutOrdering() *AsyncQueueingSubscriber {
+	a.unordered = true
+	a.keyFn = nil
+	return a
 }
 
 // WithTicker enables periodic tick messages at the specified interval.
@@ -121,13 +224,77 @@ func (a *AsyncQueueingSubscriber) WithName(name string) *AsyncQueueingSubscriber
 	return a
 }
 
-// Start begins processing messages in a background goroutine.
+// Start begins processing messages in a background goroutine per partition.
 // This method must be called after configuration (WithTicker, etc.) to start processing.
 // Returns the same AsyncQueueingSubscriber instance for method chaining.
 func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
-	a.wg.Add(1)
-	go a.processQueue()
+	for i := range a.queues {
+		a.wg.Add(1)
+		go a.processQueue(i)
+	}
 	return a
+}
+
+// partitionFor picks the queue a message belongs to.
+//
+// The single-partition case answers without hashing anything, which is what
+// keeps an unpartitioned subscriber exactly as cheap as it was before
+// partitioning existed.
+//
+// FNV-1a because only within-process agreement is required: the queues live and
+// die with this object, so there is nothing to be consistent with across a
+// restart or across a fleet. What a stable, unseeded hash does buy is a key that
+// lands in the same place every time within a run, which is the difference
+// between a reproducible report and one that moves while being read.
+func (a *AsyncQueueingSubscriber) partitionFor(msg bus.EventBusMessage) int {
+	n := len(a.queues)
+	if n == 1 {
+		return 0
+	}
+
+	if a.unordered {
+		return int(atomic.AddUint32(&a.next, 1) % uint32(n))
+	}
+
+	// Only an event has a key to compute. A subscribe, unsubscribe or
+	// pass-through partitions on its topic, because the key function is written
+	// against a message — asking it about a subscribe would hand it a nil
+	// payload and no fields, and get a failure rather than an answer.
+	key := msg.Topic
+	if a.keyFn != nil && msg.MsgType == bus.MessageTypeEvent {
+		key = a.keyFn(msg)
+	}
+
+	h := fnv.New32a()
+	// Hash.Write never returns an error, per the hash.Hash contract.
+	_, _ = h.Write([]byte(key))
+
+	return int(h.Sum32() % uint32(n))
+}
+
+// enqueue offers a message to its partition, or reports why it could not.
+//
+// Every entry point funnels through here — the three Subscriber methods and
+// PassThrough — because they differ only in the message they build. What
+// happens to it afterwards is one policy, and a policy in four copies is a
+// policy that will be three after the next change.
+//
+// A full queue refuses rather than blocks. The caller learns of it through
+// ErrQueueFull, and for a delivery that carries a settler that error is what
+// nacks it: a queue refusing a message is a refusal to have accepted it, not a
+// failure while handling it.
+func (a *AsyncQueueingSubscriber) enqueue(msg bus.EventBusMessage) error {
+	if a.IsClosed() {
+		return ErrSubscriberClosed
+	}
+
+	select {
+	case a.queues[a.partitionFor(msg)] <- msg:
+		return nil
+	default:
+		a.recordDrop()
+		return ErrQueueFull
+	}
 }
 
 // processMessage handles a single message by dispatching it to the appropriate
@@ -145,12 +312,12 @@ func (a *AsyncQueueingSubscriber) Start() *AsyncQueueingSubscriber {
 // nothing is waiting on its outcome — so even where one carries a context with
 // a settler on it, that settler belongs to some other message's delivery and
 // this is not the place to decide it.
-func (a *AsyncQueueingSubscriber) processMessage(msg bus.EventBusMessage) {
+func (a *AsyncQueueingSubscriber) processMessage(msg bus.EventBusMessage, partition int) {
 	ctx := context.WithoutCancel(msg.Ctx)
 
 	var span trace.Span
 	if a.tracer != nil {
-		ctx, span = a.startConsumerSpan(ctx, msg)
+		ctx, span = a.startConsumerSpan(ctx, msg, partition)
 		defer span.End()
 	}
 
@@ -219,7 +386,7 @@ func (a *AsyncQueueingSubscriber) dispatch(ctx context.Context, msg bus.EventBus
 // startConsumerSpan starts a new-root consumer span for processing a queued
 // message. The span is linked to the caller's span (if valid) so traces
 // remain causally connected across the async boundary.
-func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg bus.EventBusMessage) (context.Context, trace.Span) {
+func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg bus.EventBusMessage, partition int) (context.Context, trace.Span) {
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("vinculum"),
 		semconv.MessagingOperationTypeDeliver,
@@ -230,6 +397,12 @@ func (a *AsyncQueueingSubscriber) startConsumerSpan(ctx context.Context, msg bus
 	}
 	if a.name != "" {
 		attrs = append(attrs, attribute.String("vinculum.subscriber.name", a.name))
+	}
+	// Only where there is a choice of partition. On an unpartitioned subscriber
+	// the attribute would be zero on every span, which is a column of noise
+	// rather than a fact about the message.
+	if len(a.queues) > 1 {
+		attrs = append(attrs, semconv.MessagingDestinationPartitionID(strconv.Itoa(partition)))
 	}
 
 	opts := []trace.SpanStartOption{
@@ -263,39 +436,49 @@ func spanNameFor(msg bus.EventBusMessage) string {
 	}
 }
 
-// processQueue runs in a background goroutine and processes messages from the queue
-func (a *AsyncQueueingSubscriber) processQueue() {
+// processQueue runs in a background goroutine and processes messages from one
+// partition's queue.
+//
+// Only partition 0 ticks. A tick is a periodic event for the wrapped
+// subscriber, not a message being delivered to it, so it should arrive once per
+// interval however many partitions are draining alongside — a keepalive sent
+// eight times is eight keepalives.
+func (a *AsyncQueueingSubscriber) processQueue(partition int) {
 	defer a.wg.Done()
+
+	queue := a.queues[partition]
 
 	// Set up ticker channel if ticker is configured
 	var tickerChan <-chan time.Time
-	if a.ticker != nil {
+	if a.ticker != nil && partition == 0 {
 		tickerChan = a.ticker.C
 	}
 
 	for {
 		select {
-		case msg := <-a.queue:
-			a.processMessage(msg)
+		case msg := <-queue:
+			a.processMessage(msg, partition)
 		case <-tickerChan:
 			a.processMessage(bus.EventBusMessage{
 				Ctx:     context.Background(),
 				MsgType: bus.MessageTypeTick,
-			})
+			}, partition)
 		case <-a.done:
 			// Shutdown signal received, drain remaining messages
-			a.drainQueue()
+			a.drainQueue(queue, partition)
 			return
 		}
 	}
 }
 
-// drainQueue processes any remaining messages in the queue during shutdown
-func (a *AsyncQueueingSubscriber) drainQueue() {
+// drainQueue processes any remaining messages in one partition's queue during
+// shutdown. Each goroutine drains its own, so the order within a partition
+// survives shutdown exactly as it does in normal running.
+func (a *AsyncQueueingSubscriber) drainQueue(queue chan bus.EventBusMessage, partition int) {
 	for {
 		select {
-		case msg := <-a.queue:
-			a.processMessage(msg)
+		case msg := <-queue:
+			a.processMessage(msg, partition)
 		default:
 			// No more messages to drain
 			return
@@ -303,72 +486,39 @@ func (a *AsyncQueueingSubscriber) drainQueue() {
 	}
 }
 
-// OnSubscribe queues a subscribe operation and returns immediately
+// OnSubscribe queues a subscribe operation and returns immediately.
+//
+// A subscribe carries no payload, so it partitions on its topic whatever the
+// key function is. Where a custom key puts that topic's events in a different
+// partition, this is no longer ordered before them — a subscriber that depends
+// on seeing its subscribe first should not be partitioned.
 func (a *AsyncQueueingSubscriber) OnSubscribe(ctx context.Context, topic string) error {
-	// Check if closed first
-	if a.IsClosed() {
-		return ErrSubscriberClosed
-	}
-
-	msg := bus.EventBusMessage{
+	return a.enqueue(bus.EventBusMessage{
 		Ctx:     ctx,
 		MsgType: bus.MessageTypeSubscribe,
 		Topic:   topic,
-	}
-
-	select {
-	case a.queue <- msg:
-		return nil
-	default:
-		a.recordDrop()
-		return ErrQueueFull
-	}
+	})
 }
 
-// OnUnsubscribe queues an unsubscribe operation and returns immediately
+// OnUnsubscribe queues an unsubscribe operation and returns immediately. Like
+// OnSubscribe, it partitions on its topic.
 func (a *AsyncQueueingSubscriber) OnUnsubscribe(ctx context.Context, topic string) error {
-	// Check if closed first
-	if a.IsClosed() {
-		return ErrSubscriberClosed
-	}
-
-	msg := bus.EventBusMessage{
+	return a.enqueue(bus.EventBusMessage{
 		Ctx:     ctx,
 		MsgType: bus.MessageTypeUnsubscribe,
 		Topic:   topic,
-	}
-
-	select {
-	case a.queue <- msg:
-		return nil
-	default:
-		a.recordDrop()
-		return ErrQueueFull
-	}
+	})
 }
 
 // OnEvent queues an event and returns immediately
 func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, message any, fields map[string]string) error {
-	// Check if closed first
-	if a.IsClosed() {
-		return ErrSubscriberClosed
-	}
-
-	msg := bus.EventBusMessage{
+	return a.enqueue(bus.EventBusMessage{
 		Ctx:     ctx,
 		MsgType: bus.MessageTypeEvent,
 		Topic:   topic,
 		Payload: message,
 		Fields:  fields,
-	}
-
-	select {
-	case a.queue <- msg:
-		return nil
-	default:
-		a.recordDrop()
-		return ErrQueueFull
-	}
+	})
 }
 
 // PassThrough queues a pass-through operation and returns immediately.
@@ -378,18 +528,7 @@ func (a *AsyncQueueingSubscriber) OnEvent(ctx context.Context, topic string, mes
 // Use PassThrough only for message types that don't have specific handlers, or for forwarding
 // messages that should bypass the normal processing logic.
 func (a *AsyncQueueingSubscriber) PassThrough(msg bus.EventBusMessage) error {
-	// Check if closed first
-	if a.IsClosed() {
-		return ErrSubscriberClosed
-	}
-
-	select {
-	case a.queue <- msg:
-		return nil
-	default:
-		a.recordDrop()
-		return ErrQueueFull
-	}
+	return a.enqueue(msg)
 }
 
 // Close gracefully shuts down the async subscriber, ensuring all queued messages
@@ -419,14 +558,50 @@ func (a *AsyncQueueingSubscriber) Close() error {
 	return nil
 }
 
-// QueueDepth returns the current number of messages in the queue.
+// QueueDepth returns the current number of messages waiting, across every
+// partition.
+//
+// A total rather than a per-partition figure because of what asks: a shutdown
+// waiting for the queue to empty needs to know whether *anything* is still
+// waiting, and a maximum or a single partition's depth would let it proceed
+// with messages queued elsewhere.
 func (a *AsyncQueueingSubscriber) QueueDepth() int {
-	return len(a.queue)
+	depth := 0
+	for _, queue := range a.queues {
+		depth += len(queue)
+	}
+
+	return depth
 }
 
-// QueueCapacity returns the maximum capacity of the queue
+// QueueCapacity returns the total capacity across every partition — the queue
+// size that was configured, multiplied by the partition count.
 func (a *AsyncQueueingSubscriber) QueueCapacity() int {
-	return cap(a.queue)
+	return cap(a.queues[0]) * len(a.queues)
+}
+
+// MaxQueueDepth returns the depth of the fullest partition.
+//
+// This is the number that says whether the queue is in trouble, where
+// QueueDepth says how much is outstanding. One hot key can fill its own
+// partition and start refusing messages while seven others sit empty, and the
+// total across the eight reads as comfortable for exactly as long as that is
+// happening.
+func (a *AsyncQueueingSubscriber) MaxQueueDepth() int {
+	max := 0
+	for _, queue := range a.queues {
+		if depth := len(queue); depth > max {
+			max = depth
+		}
+	}
+
+	return max
+}
+
+// Partitions returns how many queues, and therefore how many goroutines, this
+// subscriber is running. Always at least one.
+func (a *AsyncQueueingSubscriber) Partitions() int {
+	return len(a.queues)
 }
 
 // DroppedTotal returns the number of messages refused because the queue was
