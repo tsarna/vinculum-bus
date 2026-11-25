@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Stop()` no longer panics a concurrent publisher with `send on closed
+  channel`.** `Stop()` closed the bus's channel while another goroutine could
+  be between its "is the bus started?" check and its send. The channel is no
+  longer closed; senders and the delivery loop already watch the bus's context.
+- **`PublishSync`, `Subscribe`, `Unsubscribe` and `UnsubscribeAll` return
+  `event bus stopped` instead of waiting forever** when the bus stops before
+  handling their request. Before, one queued just ahead of `Stop()` never got
+  an answer.
+
 ## [0.20.0] - 2026-09-01
 
 ### Added

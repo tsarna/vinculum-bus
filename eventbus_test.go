@@ -1892,3 +1892,45 @@ func TestTracing_AsyncPublishCreatesLinkedConsumerSpan(t *testing.T) {
 	assert.Equal(t, publishSpan.SpanContext.SpanID(), deliverSpan.Links[0].SpanContext.SpanID(),
 		"link should point to the publish span")
 }
+
+// Stop used to close the bus's channel, which panicked any sender caught
+// between its started check and its send. Publishers and subscription changes
+// race Stop here; under -race the detector is the assertion, and without it a
+// panic or a caller left waiting still fails the test.
+func TestEventBusStopWhilePublishing(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		eventBus, err := NewEventBus().WithBufferSize(4).Build()
+		require.NoError(t, err)
+		require.NoError(t, eventBus.Start())
+
+		subscriber := NewMockSubscriber()
+		ctx := context.Background()
+
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 20; j++ {
+					_ = eventBus.Publish(ctx, "test/topic", j)
+					_ = eventBus.PublishSync(ctx, "test/topic", j)
+					_ = eventBus.Subscribe(ctx, "test/topic", subscriber)
+					_ = eventBus.UnsubscribeAll(ctx, subscriber)
+				}
+			}()
+		}
+
+		require.NoError(t, eventBus.Stop())
+
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a caller was still waiting on the bus after Stop")
+		}
+	}
+}

@@ -113,6 +113,7 @@ func (b *EventBusBuilder) Build() (EventBus, error) {
 		ch:            make(chan EventBusMessage, b.bufferSize),
 		ctx:           ctx,
 		cancel:        cancel,
+		stopped:       make(chan struct{}),
 		subscriptions: make(map[Subscriber]map[string]matcher),
 		logger:        logger,
 		busName:       busName,
