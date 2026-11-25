@@ -122,11 +122,18 @@ type syncPublishRequest struct {
 // basicEventBus implements the EventBus interface using minimal locking.
 // Uses atomic operations for the started flag and relies on Go's
 // inherently thread-safe channels for message passing.
+//
+// ch is never closed. Any goroutine may send to it, and nothing can tell
+// whether one is between its started check and its send, so a close could
+// land in that window and panic the sender. Senders and the delivery loop
+// both watch ctx instead.
 type basicEventBus struct {
 	ch            chan EventBusMessage
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
+	stopped       chan struct{} // closed once the delivery loop has exited
+	stopOnce      sync.Once
 	started       int32 // Atomic boolean (0 = false, 1 = true)
 	subscriptions map[Subscriber]map[string]matcher
 	logger        *zap.Logger
@@ -481,7 +488,7 @@ func (b *basicEventBus) PublishSync(ctx context.Context, topic string, payload a
 		Ctx: ctx,
 	}, responseCh)
 
-	err := <-responseCh
+	err := b.awaitResponse(responseCh)
 
 	// Record metrics
 	if b.hasMetrics {
@@ -524,7 +531,7 @@ func (b *basicEventBus) Subscribe(ctx context.Context, topic string, subscriber 
 		Ctx: ctx,
 	}, responseCh)
 
-	err := <-responseCh
+	err := b.awaitResponse(responseCh)
 
 	if b.hasMetrics {
 		b.subscribeCounter.Add(ctx, 1, b.metricAttrs(topic))
@@ -560,7 +567,7 @@ func (b *basicEventBus) Unsubscribe(ctx context.Context, topic string, subscribe
 		Ctx: ctx,
 	}, responseCh)
 
-	err := <-responseCh
+	err := b.awaitResponse(responseCh)
 
 	if b.hasMetrics {
 		b.unsubscribeCounter.Add(ctx, 1, b.metricAttrs(topic))
@@ -585,7 +592,7 @@ func (b *basicEventBus) UnsubscribeAll(ctx context.Context, subscriber Subscribe
 		Ctx: ctx,
 	}, responseCh)
 
-	err := <-responseCh
+	err := b.awaitResponse(responseCh)
 
 	if b.hasMetrics {
 		b.unsubscribeCounter.Add(ctx, 1, b.metricAttrs("*"))
@@ -872,6 +879,25 @@ func (b *basicEventBus) acceptWithResponse(msg EventBusMessage, responseCh chan 
 	}
 }
 
+// awaitResponse waits for the delivery loop to answer a request it was handed.
+// A request can be accepted and then never processed: the loop exits on Stop
+// without draining ch, and a sender can still slip a message in while Stop is
+// running. So the wait also ends once the loop has exited, and an answer the
+// loop gave before exiting still wins.
+func (b *basicEventBus) awaitResponse(responseCh chan error) error {
+	select {
+	case err := <-responseCh:
+		return err
+	case <-b.stopped:
+		select {
+		case err := <-responseCh:
+			return err
+		default:
+			return fmt.Errorf("event bus stopped")
+		}
+	}
+}
+
 // operationName names a message type for the metric attribute that tells one
 // kind of drop from another.
 func operationName(msgType MessageType) string {
@@ -898,7 +924,7 @@ func (b *basicEventBus) Stop() error {
 
 	b.cancel()
 	b.wg.Wait()
-	close(b.ch) // Thread-safe channel operation
+	b.stopOnce.Do(func() { close(b.stopped) })
 
 	b.logger.Info("EventBus stopped")
 	return nil
